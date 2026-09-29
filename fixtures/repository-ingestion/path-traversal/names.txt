@@ -1,0 +1,8 @@
+# Repository-controlled path shapes that must never escape the workspace.
+../evil.py
+../../escape.py
+/absolute.py
+C:\win.py
+\\unc\share.py
+a/../../b.py
+.../dots.py

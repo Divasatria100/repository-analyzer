@@ -1,0 +1,4 @@
+# Fixture git attributes with a smudge filter (DATA ONLY).
+# Retrieval must never execute clean/smudge filters; content must arrive raw.
+*.bin filter=test-smudge diff=test-diff
+*.txt text

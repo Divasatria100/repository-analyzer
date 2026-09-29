@@ -1,5 +1,6 @@
 """Temporary repository helpers: build repo-like trees as data, never execute."""
 
+import subprocess
 from pathlib import Path
 
 
@@ -33,3 +34,36 @@ def copy_fixture_tree(dest: Path, *parts: str) -> Path:
     target = dest / source.name
     shutil.copytree(source, target)
     return target
+
+
+def init_git_repo(path: Path, files: dict[str, str], branch: str = "main") -> str:
+    """Create a real local git repo from synthetic files; return HEAD SHA.
+
+    Uses the ``git`` binary as a content-addressing tool only: files are
+    written as data and committed, never executed. Honors the ambient
+    developer git config for identity via ``-c`` overrides (no global writes).
+    """
+
+    def git(*argv: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *argv],
+            cwd=path,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        )
+
+    path.mkdir(parents=True, exist_ok=True)
+    git("init", "-b", branch)
+    git("config", "user.email", "fixture@example.test")
+    git("config", "user.name", "Fixture")
+    git("config", "commit.gpgsign", "false")
+    for relpath, content in files.items():
+        target = path / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "fixture commit", "--no-gpg-sign")
+    return git("rev-parse", "HEAD").stdout.strip()

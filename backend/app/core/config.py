@@ -18,6 +18,7 @@ configuration. There are no silent fallbacks to valid values.
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -169,6 +170,22 @@ class LoggingSettings(BaseModel):
     )
 
 
+class WorkspaceSettings(BaseModel):
+    """Disposable per-analysis workspace root (environment-specific path)."""
+
+    root: str = Field(
+        default="",
+        description="Workspace root directory. Empty resolves to the system temp dir.",
+    )
+
+    def resolved_root(self) -> Path:
+        """Absolute workspace root, defaulting to a temp-dir subdirectory."""
+        from tempfile import gettempdir
+
+        base = self.root.strip() or str(Path(gettempdir()) / "repolens-workspaces")
+        return Path(base).expanduser().resolve()
+
+
 class Settings(BaseSettings):
     """Root settings. Read once at startup; invalid values fail closed."""
 
@@ -188,6 +205,7 @@ class Settings(BaseSettings):
     network: NetworkSettings = Field(default_factory=NetworkSettings)
     operational: OperationalSettings = Field(default_factory=OperationalSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
 
     def describe(self) -> dict[str, Any]:
         """Operator-inspectable view of effective values (SECISO-907)."""

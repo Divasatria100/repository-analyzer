@@ -1,0 +1,6 @@
+# Malformed branch/commit inputs (DATA ONLY, used by parametrized tests).
+not a branch!!!
+branch with spaces
+../../../etc
+sha-too-short
+zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz

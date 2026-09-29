@@ -38,6 +38,7 @@ def _repo_payload(private: bool = False) -> dict[str, object]:
         "full_name": f"{OWNER}/{REPO}",
         "private": private,
         "default_branch": DEFAULT_BRANCH,
+        "size": 128,
     }
 
 
@@ -45,8 +46,8 @@ def _branch_payload(name: str) -> dict[str, object]:
     return {"name": name, "commit": {"sha": COMMIT_SHA}}
 
 
-def _commit_payload() -> dict[str, object]:
-    return {"sha": COMMIT_SHA, "commit": {"message": "fixture commit"}}
+def _commit_payload(sha: str = COMMIT_SHA) -> dict[str, object]:
+    return {"sha": sha, "commit": {"message": "fixture commit"}}
 
 
 def github_transport(scenario: GitHubScenario) -> httpx.MockTransport:
@@ -66,17 +67,22 @@ def github_transport(scenario: GitHubScenario) -> httpx.MockTransport:
                 json={"message": "Mock API rate limit exceeded"},
                 headers={"X-RateLimit-Remaining": "0"},
             )
+        if not path.startswith(REPO_PATH):
+            return httpx.Response(404, json={"message": "No mock route"})
+        if scenario == "not_found":
+            return httpx.Response(404, json={"message": "Mock not found"})
         if path == REPO_PATH:
-            if scenario == "not_found":
-                return httpx.Response(404, json={"message": "Mock not found"})
             return httpx.Response(200, json=_repo_payload(scenario == "private_repo"))
-        if path == f"{REPO_PATH}/branches/{DEFAULT_BRANCH}":
+        branch_prefix = f"{REPO_PATH}/branches/"
+        if path.startswith(branch_prefix):
             if scenario == "branch_missing":
                 return httpx.Response(404, json={"message": "Mock branch not found"})
-            return httpx.Response(200, json=_branch_payload(DEFAULT_BRANCH))
-        if path == f"{REPO_PATH}/commits/{COMMIT_SHA}":
+            return httpx.Response(200, json=_branch_payload(path[len(branch_prefix) :]))
+        commit_prefix = f"{REPO_PATH}/commits/"
+        if path.startswith(commit_prefix):
             if scenario == "commit_missing":
                 return httpx.Response(404, json={"message": "Mock commit not found"})
+            # Real API resolves short SHAs to the full immutable SHA.
             return httpx.Response(200, json=_commit_payload())
         return httpx.Response(404, json={"message": "No mock route"})
 
