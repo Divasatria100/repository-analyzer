@@ -1,2 +1,7 @@
 # Docker files for the local development environment.
-# Service Dockerfiles will be added in a later phase.
+#
+# - backend.Dockerfile:  RepoLens FastAPI backend (python:3.13-slim)
+# - frontend.Dockerfile: RepoLens Vite frontend (node:24-slim)
+#
+# Development images only — no production pipeline. Containers run
+# RepoLens's own services; analyzed repositories are never executed here.

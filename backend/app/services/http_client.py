@@ -28,6 +28,8 @@ from typing import Any, cast
 
 import httpx
 
+from app.core.logging import redact_text
+
 _HTTPS = "https://"
 
 
@@ -80,11 +82,12 @@ def _is_transient(error: Exception) -> bool:
 
 
 def _to_service_error(error: httpx.HTTPError) -> ServiceClientError:
+    # Redact first: transport errors echo URLs that may carry credentials.
     if isinstance(error, httpx.TimeoutException):
-        return ServiceTimeoutError(f"Service call timed out: {error}")
+        return ServiceTimeoutError(f"Service call timed out: {redact_text(str(error))}")
     if isinstance(error, httpx.TransportError):
-        return ServiceConnectionError(f"Service could not be reached: {error}")
-    return ServiceClientError(f"Service communication failed: {error}")
+        return ServiceConnectionError(f"Service could not be reached: {redact_text(str(error))}")
+    return ServiceClientError(f"Service communication failed: {redact_text(str(error))}")
 
 
 def _check_headers(headers: dict[str, str] | None) -> dict[str, str]:

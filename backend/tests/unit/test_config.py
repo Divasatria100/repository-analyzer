@@ -8,8 +8,8 @@ guarantees a clean environment per test.
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import get_settings, load_settings
-from app.main import create_app
+from app.core.config import format_validation_error, get_settings, load_settings
+from app.main import build_app, create_app
 
 _MB = 1024 * 1024
 
@@ -162,3 +162,54 @@ def test_application_fails_closed_with_invalid_configuration(
     monkeypatch.setenv("REPOLENS_OPERATIONAL__GRAPH_MAX_NODES", "1")
     with pytest.raises(ValidationError):
         get_settings()
+
+
+def test_format_validation_error_identifies_field_without_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REPOLENS_OPERATIONAL__CONCURRENCY_MAX_ANALYSES", "99")
+    try:
+        load_settings()
+        raise AssertionError("expected ValidationError")
+    except ValidationError as exc:
+        report = format_validation_error(exc)
+    assert "operational.concurrency_max_analyses" in report
+    assert "99" not in report
+
+
+def test_format_validation_error_never_exposes_database_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "REPOLENS_DATABASE__URL", "postgresql+psycopg://admin:hunter2@db:5432/repolens"
+    )
+    monkeypatch.setenv("REPOLENS_OPERATIONAL__GRAPH_MAX_NODES", "1")
+    try:
+        load_settings()
+        raise AssertionError("expected ValidationError")
+    except ValidationError as exc:
+        report = format_validation_error(exc)
+    assert "hunter2" not in report
+    assert "database.url" in report or "operational.graph_max_nodes" in report
+
+
+def test_startup_fails_closed_without_silent_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REPOLENS_OPERATIONAL__CONCURRENCY_MAX_ANALYSES", "99")
+    with pytest.raises(SystemExit) as exc_info:
+        build_app()
+    assert "Invalid configuration" in str(exc_info.value.code)
+    assert "operational.concurrency_max_analyses" in str(exc_info.value.code)
+
+
+def test_startup_failure_hides_database_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "REPOLENS_DATABASE__URL", "postgresql+psycopg://admin:hunter2@db:5432/repolens"
+    )
+    monkeypatch.setenv("REPOLENS_OPERATIONAL__GRAPH_MAX_NODES", "1")
+    with pytest.raises(SystemExit) as exc_info:
+        build_app()
+    report = str(exc_info.value.code)
+    assert "hunter2" not in report
+    assert "Invalid configuration" in report

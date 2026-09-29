@@ -1,7 +1,99 @@
-# Local development environment (foundation placeholder).
+# RepoLens — local development environment (Docker Compose).
 #
-# Services (frontend, backend, PostgreSQL 17.x) will be defined in a later
-# phase. Docker is for the local development environment only
-# (see docs/09-supported-technologies.md, Section 9).
+# Runs RepoLens's OWN services only: PostgreSQL, the FastAPI backend, and
+# the Vite frontend. This is NOT an execution sandbox: analyzed
+# repositories are untrusted input and are never executed, installed,
+# built, or migrated here (see docs/15-security-and-isolation.md).
+#
+# Usage:
+#   cp .env.example .env   # optional; safe defaults work out of the box
+#   docker compose up --build
+#
+# Reachability:
+#   Browser  -> http://localhost:5173  (frontend)
+#   Browser  -> http://localhost:8000/api/health  (backend)
+#   Backend  -> postgres:5432         (Compose service name, not localhost)
+#
+# No privileged mode, no Docker socket mount, no analyzed-repo mounts.
 
 name: repolens
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-repolens}
+      POSTGRES_USER: ${POSTGRES_USER:-repolens}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-repolens-dev-only}
+    ports:
+      # Localhost-only: host access for development, never all interfaces.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-repolens} -d ${POSTGRES_DB:-repolens}",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - repolens-dev
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      REPOLENS_ENVIRONMENT: ${REPOLENS_ENVIRONMENT:-local}
+      REPOLENS_DATABASE__URL: ${REPOLENS_DATABASE__URL:-postgresql+psycopg://${POSTGRES_USER:-repolens}:${POSTGRES_PASSWORD:-repolens-dev-only}@postgres:5432/${POSTGRES_DB:-repolens}}
+    ports:
+      - "8000:8000"
+    volumes:
+      # Source mount for FastAPI --reload during development.
+      - ./backend:/srv/backend
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - repolens-dev
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend.Dockerfile
+    environment:
+      # Public base URL for FUTURE frontend -> backend calls. No secrets here.
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+      # Polling watcher: host bind-mounts don't emit inotify events.
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "5173:5173"
+    volumes:
+      # Source mount for Vite hot reload during development.
+      - ./frontend:/srv/frontend
+      # Preserve container-installed dependencies under the source mount.
+      - frontend-node-modules:/srv/frontend/node_modules
+    networks:
+      - repolens-dev
+
+networks:
+  repolens-dev:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  frontend-node-modules:

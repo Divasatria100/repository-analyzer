@@ -20,7 +20,7 @@ configuration. There are no silent fallbacks to valid values.
 from functools import lru_cache
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Units: sizes in bytes unless the name states otherwise.
@@ -204,6 +204,21 @@ class Settings(BaseSettings):
 def load_settings() -> Settings:
     """Build settings from environment. Raises ValidationError when invalid."""
     return Settings()
+
+
+def format_validation_error(exc: ValidationError) -> str:
+    """Render a startup-safe validation report: section, field, reason.
+
+    Raw input values are never included — an invalid database URL or any
+    other environment value may itself carry credentials, so only the
+    dotted location (``section.field``) and the validation reason are
+    reported. Safe to print to stderr and to logs.
+    """
+    lines = ["Invalid configuration:"]
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error.get("loc", ())) or "<root>"
+        lines.append(f"  {location}: {error.get('msg', 'invalid value')}")
+    return "\n".join(lines)
 
 
 @lru_cache(maxsize=1)
