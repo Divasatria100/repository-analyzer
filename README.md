@@ -1,4 +1,4 @@
-# RepoLens — GitHub Repository Security & Architecture Analyzer
+# RepoLens: GitHub Repository Security & Architecture Analyzer
 
 RepoLens analyzes a public GitHub repository without running it, and shows which files, modules, dependencies, and code patterns deserve further review.
 
