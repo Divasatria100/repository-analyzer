@@ -34,6 +34,11 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "unit: fast tests without external services",
+    "integration: tests against local services only",
+    "security: non-execution and mock-boundary tests",
+]
 
 [tool.ruff]
 target-version = "py313"

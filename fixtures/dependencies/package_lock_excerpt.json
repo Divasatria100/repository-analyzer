@@ -1,0 +1,18 @@
+{
+  "name": "fixture-shop",
+  "version": "1.0.0",
+  "packages": {
+    "node_modules/express": {
+      "version": "4.18.2",
+      "dependencies": {
+        "qs": "6.11.0"
+      }
+    },
+    "node_modules/lodash": {
+      "version": "4.17.20"
+    },
+    "node_modules/lodash-duplicate": {
+      "version": "4.17.21"
+    }
+  }
+}
