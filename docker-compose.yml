@@ -1,0 +1,7 @@
+# Local development environment (foundation placeholder).
+#
+# Services (frontend, backend, PostgreSQL 17.x) will be defined in a later
+# phase. Docker is for the local development environment only
+# (see docs/09-supported-technologies.md, Section 9).
+
+name: repolens

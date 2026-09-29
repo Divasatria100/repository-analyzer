@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+/* RepoLens design tokens — source of truth: docs/DESIGN.md (Section 1). */
+@theme {
+  --color-primary: #10b981;
+  --color-secondary: #050a07;
+  --color-background: #030705;
+  --color-surface: #18181b;
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #a1a1aa;
+  --color-border: #27272a;
+
+  --font-display: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-panel: 15px;
+  --radius-control: 8px;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-text-primary);
+  font-family: var(--font-display);
+}
