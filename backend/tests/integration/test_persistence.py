@@ -153,6 +153,7 @@ def test_migration_upgrades_and_downgrades(tmp_path: Path, monkeypatch: pytest.M
     try:
         tables = inspect(engine).get_table_names()
         assert "repositories" in tables and "analyses" in tables
+        assert "files" in tables and "limitations" in tables
     finally:
         engine.dispose()
     downgrade(config, "base")
@@ -160,5 +161,6 @@ def test_migration_upgrades_and_downgrades(tmp_path: Path, monkeypatch: pytest.M
     try:
         tables = inspect(engine).get_table_names()
         assert "repositories" not in tables and "analyses" not in tables
+        assert "files" not in tables and "limitations" not in tables
     finally:
         engine.dispose()

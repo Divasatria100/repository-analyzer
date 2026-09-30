@@ -140,7 +140,8 @@ def test_happy_path_records_immutable_context(tmp_path: Path) -> None:
         row = session.get(Analysis, result.context.analysis_id)
         assert row is not None
         assert row.resolved_commit_sha == head
-        assert row.stage == "RetrievingRepository"
+        # Indexing + language detection run in the orchestrator (Phase 4).
+        assert row.stage == "DetectingLanguages"
         assert row.outcome is None
         assert row.workspace_path == str(result.workspace)
         assert session.scalar(text("SELECT COUNT(*) FROM repositories")) == 1
@@ -300,3 +301,72 @@ def test_oversize_repository_rejected_before_persistence(tmp_path: Path) -> None
 def test_settings_type_is_settings() -> None:
     settings: Settings = load_settings()
     assert settings.operational.repo_max_size_bytes == 200 * 1024 * 1024
+
+
+def test_index_persisted_for_ingested_snapshot(tmp_path: Path) -> None:
+    from app.models.repository import Analysis
+    from app.repositories import indexing as index_gateway
+
+    result, session, engine, workspaces, head = _ingest(
+        tmp_path,
+        {"main.py": "x = 1\n", "docs/guide.md": "# hi\n"},
+    )
+    try:
+        # M1: file rows belong to this analysis snapshot, index is complete.
+        assert result.index.complete is True
+        assert result.index.limitations == []
+        rows = index_gateway.get_files(session, result.context.analysis_id)
+        by_path = {row.path: row for row in rows}
+        assert set(by_path) == {"main.py", "docs/guide.md"}
+        assert by_path["main.py"].eligibility == "eligible"
+        assert by_path["main.py"].language == "python"
+        assert by_path["main.py"].parse_result is None
+        assert by_path["docs/guide.md"].eligibility == "not_eligible"
+        assert index_gateway.get_limitations(session, result.context.analysis_id) == []
+        row = session.get(Analysis, result.context.analysis_id)
+        assert row is not None and row.stage == "DetectingLanguages"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_indexing_failure_cleans_workspace_and_marks_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.repository.ingestion as orchestrator
+    from app.models.repository import Analysis
+    from app.repository.errors import IndexingError
+
+    source = tmp_path / "source"
+    head = init_git_repo(source, {"main.py": "x = 1\n"})
+    settings = load_settings()
+    engine, session = _open_session()
+    workspaces = WorkspaceManager(tmp_path / "workspaces")
+    github = GitHubClient(_service_client(_github_transport(head)))
+
+    def _boom(**kwargs: object) -> object:
+        raise IndexingError("injected indexing failure")
+
+    monkeypatch.setattr(orchestrator, "index_workspace", _boom)
+    try:
+        with pytest.raises(IndexingError):
+            ingest_repository(
+                raw_url=REPO_URL,
+                settings=settings,
+                session=session,
+                github=github,
+                workspaces=workspaces,
+                retrieval=RetrievalService.from_settings(settings),
+                concurrency=ConcurrencyManager(2),
+                remote_url_override=str(source),
+                allow_local_paths=True,
+            )
+        row = session.scalar(select(Analysis).order_by(Analysis.created_at.desc()).limit(1))
+        # Workspace cleaned, analysis Failed, nothing half-indexed.
+        assert row is not None and row.outcome == "Failed"
+        assert row.explanation == "injected indexing failure"
+        assert list(workspaces.root.iterdir()) == []
+        assert session.scalar(text("SELECT COUNT(*) FROM files")) == 0
+    finally:
+        session.close()
+        engine.dispose()

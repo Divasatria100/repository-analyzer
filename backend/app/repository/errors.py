@@ -165,6 +165,20 @@ class WorkspaceError(IngestionError):
         super().__init__(message)
 
 
+class IndexingError(IngestionError):
+    """File index could not be built (workspace missing/inaccessible/failure).
+
+    Limit-driven incompleteness is NOT an error: it is recorded as explicit
+    limitations and the analysis continues. Only unexpected failures raise.
+    """
+
+    def __init__(
+        self,
+        message: str = "The repository index could not be built.",
+    ) -> None:
+        super().__init__(message)
+
+
 class ConcurrencyExhaustedError(IngestionError):
     """All analysis slots are in use (docs/17 RATE_LIMITED, NFR-045)."""
 

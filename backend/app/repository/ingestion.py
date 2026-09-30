@@ -7,14 +7,16 @@ later stages arrive in later phases):
 Validate URL -> Validate Public Repository -> Retrieve Metadata
   -> Resolve Branch -> Resolve Commit -> Persist Analysis Context
   -> Acquire Analysis Slot -> Create Workspace -> Retrieve Immutable Commit
-  -> Validate Retrieval Result
+  -> Validate Retrieval Result -> Index Files -> Detect Languages
 ```
 
-The analysis row keeps stage ``RetrievingRepository`` with no outcome after
-a successful retrieval: downstream stages (indexing onward) do not exist
-yet, and no invented stage is recorded. Validation failures happen before
-any persistence (docs/12 §6.3); retrieval failures clean the workspace and
-mark the analysis Failed with a user-safe explanation.
+Indexing and language detection run here because the workspace snapshot is
+their only input; parsing and later stages arrive in later phases (the
+analysis row therefore rests at DetectingLanguages with no outcome).
+
+Validation failures happen before any persistence (docs/12 §6.3);
+retrieval or indexing failures clean the workspace and mark the analysis
+Failed with a user-safe explanation.
 """
 
 from __future__ import annotations
@@ -30,9 +32,11 @@ from app.core.logging import get_logger, log_event
 from app.models.repository import ORIGIN_DEFAULTED, ORIGIN_REQUESTED
 from app.repositories import ingestion as persistence
 from app.repository.concurrency import ConcurrencyManager
-from app.repository.errors import RetrievalError
+from app.repository.errors import IndexingError, RetrievalError
 from app.repository.github import GitHubClient
 from app.repository.identity import normalize_github_url
+from app.repository.index_types import IndexResult
+from app.repository.indexing import index_workspace
 from app.repository.retrieval import RetrievalResult, RetrievalService, check_remote_size
 from app.repository.workspace import WorkspaceManager
 
@@ -69,6 +73,7 @@ class IngestionResult:
     context: AnalysisContext
     workspace: Path
     retrieval: RetrievalResult
+    index: IndexResult
 
 
 def ingest_repository(
@@ -170,6 +175,20 @@ def ingest_repository(
             persistence.mark_failed(session, analysis, exc.user_message)
             session.commit()
             raise
+        persistence.set_stage(session, analysis, "IndexingFiles")
+        try:
+            index = index_workspace(
+                workspace=workspace,
+                analysis_id=analysis.id,
+                settings=settings,
+                session=session,
+            )
+        except IndexingError as exc:
+            workspaces.cleanup(workspace, analysis.id)
+            persistence.mark_failed(session, analysis, exc.user_message)
+            session.commit()
+            raise
+        persistence.set_stage(session, analysis, "DetectingLanguages")
     log_event(
         _logger,
         logging.INFO,
@@ -179,4 +198,4 @@ def ingest_repository(
         repository=identity.full_name,
     )
     session.commit()
-    return IngestionResult(context=context, workspace=workspace, retrieval=result)
+    return IngestionResult(context=context, workspace=workspace, retrieval=result, index=index)
