@@ -10,9 +10,9 @@ Validate URL -> Validate Public Repository -> Retrieve Metadata
   -> Validate Retrieval Result -> Index Files -> Detect Languages
 ```
 
-Indexing and language detection run here because the workspace snapshot is
-their only input; parsing and later stages arrive in later phases (the
-analysis row therefore rests at DetectingLanguages with no outcome).
+Indexing, language detection, and parsing run here because the workspace
+snapshot is their only input; analyzers arrive in later phases (the
+analysis row therefore rests at BuildingCodeModel with no outcome).
 
 Validation failures happen before any persistence (docs/12 §6.3);
 retrieval or indexing failures clean the workspace and mark the analysis
@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.logging import get_logger, log_event
 from app.models.repository import ORIGIN_DEFAULTED, ORIGIN_REQUESTED
+from app.parsers.pipeline import run_parse_phase
 from app.repositories import ingestion as persistence
 from app.repository.concurrency import ConcurrencyManager
 from app.repository.errors import IndexingError, RetrievalError
@@ -189,6 +190,15 @@ def ingest_repository(
             session.commit()
             raise
         persistence.set_stage(session, analysis, "DetectingLanguages")
+        persistence.set_stage(session, analysis, "ParsingSource")
+        run_parse_phase(
+            session=session,
+            analysis_id=analysis.id,
+            workspace=workspace,
+            workspaces=workspaces,
+            settings=settings,
+        )
+        persistence.set_stage(session, analysis, "BuildingCodeModel")
     log_event(
         _logger,
         logging.INFO,

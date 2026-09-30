@@ -17,6 +17,7 @@ from app.models.indexing import (
     File,
     Limitation,
 )
+from app.parsers.result import ParseState
 from app.repository.index_types import IndexedFile, LimitationRecord
 
 
@@ -83,3 +84,39 @@ def get_limitations(session: Session, analysis_id: str) -> list[Limitation]:
             .order_by(Limitation.scope_kind, Limitation.file_path)
         ).all()
     )
+
+
+PARSE_RESULT_VALUES = frozenset(
+    {
+        ParseState.PARSED.value,
+        ParseState.PARSED_WITH_DIAGNOSTICS.value,
+        ParseState.FAILED.value,
+    }
+)
+
+
+def update_parse_result(
+    session: Session,
+    file_id: str,
+    state: ParseState,
+    diagnostics: list[dict[str, object]],
+) -> None:
+    """Record one file's parse outcome + structured diagnostics.
+
+    ``unsupported`` is never a ``parse_result`` value: files without an
+    adapter keep ``parse_result`` NULL with their support status intact.
+    Diagnostics are bounded structured data (severity/message/location),
+    never source text.
+    """
+    if state not in (
+        ParseState.PARSED,
+        ParseState.PARSED_WITH_DIAGNOSTICS,
+        ParseState.FAILED,
+    ):
+        raise ValueError(f"Not a persistable parse state: {state}")
+    row = session.get(File, file_id)
+    if row is None:
+        raise ValueError(f"Unknown file id: {file_id}")
+    row.parse_result = state.value
+    row.diagnostics = diagnostics
+    session.flush()

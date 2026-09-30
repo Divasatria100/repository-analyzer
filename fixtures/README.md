@@ -12,6 +12,7 @@ evaluated, or run. Filenames never match pytest collection patterns
 | `architecture/`| Module-relationship shapes (clean, circular, fan-out)|
 | `code-structure/` | Complexity/nesting/params/duplicate shapes        |
 | `malformed/`   | Intentionally unparseable source (failure isolation) |
+| `parsing/`     | Representative valid source + recovery shapes (parser coverage) |
 
 Safety rules:
 

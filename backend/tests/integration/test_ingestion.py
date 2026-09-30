@@ -140,8 +140,8 @@ def test_happy_path_records_immutable_context(tmp_path: Path) -> None:
         row = session.get(Analysis, result.context.analysis_id)
         assert row is not None
         assert row.resolved_commit_sha == head
-        # Indexing + language detection run in the orchestrator (Phase 4).
-        assert row.stage == "DetectingLanguages"
+        # Indexing, language detection, and parsing run in the orchestrator.
+        assert row.stage == "BuildingCodeModel"
         assert row.outcome is None
         assert row.workspace_path == str(result.workspace)
         assert session.scalar(text("SELECT COUNT(*) FROM repositories")) == 1
@@ -320,11 +320,13 @@ def test_index_persisted_for_ingested_snapshot(tmp_path: Path) -> None:
         assert set(by_path) == {"main.py", "docs/guide.md"}
         assert by_path["main.py"].eligibility == "eligible"
         assert by_path["main.py"].language == "python"
-        assert by_path["main.py"].parse_result is None
+        assert by_path["main.py"].parse_result == "parsed"
+        assert by_path["main.py"].diagnostics == []
         assert by_path["docs/guide.md"].eligibility == "not_eligible"
+        assert by_path["docs/guide.md"].parse_result is None
         assert index_gateway.get_limitations(session, result.context.analysis_id) == []
         row = session.get(Analysis, result.context.analysis_id)
-        assert row is not None and row.stage == "DetectingLanguages"
+        assert row is not None and row.stage == "BuildingCodeModel"
     finally:
         session.close()
         engine.dispose()

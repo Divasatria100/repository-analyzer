@@ -6,7 +6,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[4]
 FIXTURES_ROOT = REPO_ROOT / "fixtures"
 
-FIXTURE_AREAS = ("security", "dependencies", "architecture", "code-structure", "malformed")
+FIXTURE_AREAS = (
+    "security",
+    "dependencies",
+    "architecture",
+    "code-structure",
+    "malformed",
+    "parsing",
+)
 
 
 def fixture_path(*parts: str) -> Path:

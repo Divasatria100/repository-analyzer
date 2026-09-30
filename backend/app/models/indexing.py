@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -54,6 +54,7 @@ class File(Base, TimestampMixin):
     eligibility: Mapped[str] = mapped_column(String(16), nullable=False)
     eligibility_reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     parse_result: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    diagnostics: Mapped[list[dict[str, object]] | None] = mapped_column(JSON, nullable=True)
     indexing_limitation: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     __table_args__ = (
