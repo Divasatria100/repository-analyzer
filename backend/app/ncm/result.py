@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from app.parsers.ncm import Diagnostic, NormalizedModule, ncm_from_dict, ncm_to_dict
+from app.ncm.model import Diagnostic, NormalizedModule, ncm_from_dict, ncm_to_dict
 
 
 class ParseState(StrEnum):

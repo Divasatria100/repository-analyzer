@@ -10,7 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from app.parsers.result import ParseResult
+from app.ncm import ParseResult
 
 
 @dataclass(frozen=True)

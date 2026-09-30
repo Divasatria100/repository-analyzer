@@ -17,7 +17,7 @@ from app.models.indexing import (
     File,
     Limitation,
 )
-from app.parsers.result import ParseState
+from app.ncm import ParseState
 from app.repository.index_types import IndexedFile, LimitationRecord
 
 

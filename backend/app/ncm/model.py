@@ -89,13 +89,20 @@ class Diagnostic:
 
 @dataclass(frozen=True)
 class NcmModule:
-    """Source unit: one parsed file."""
+    """Source unit: one parsed file.
+
+    ``layer`` is always ``"unknown"`` at parse time. Layer assignment is
+    analyzer inference over NCM evidence (docs/08 §6.8, ARCH-REQ-065/066):
+    parsers never invent framework layers, and no directory name becomes
+    an authoritative architecture fact here.
+    """
 
     id: str
     file_path: str
     language: str
     name: str
     partially_represented: bool = False
+    layer: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -280,6 +287,7 @@ def ncm_from_dict(data: dict[str, object]) -> NormalizedModule:
         language=str(module_data["language"]),
         name=str(module_data["name"]),
         partially_represented=bool(module_data.get("partially_represented", False)),
+        layer=str(module_data.get("layer", "unknown")),
     )
 
     def items(key: str) -> list[dict[str, object]]:
@@ -403,3 +411,145 @@ def ncm_from_dict(data: dict[str, object]) -> NormalizedModule:
         parser_version=str(data.get("parser_version", "")),
         ncm_version=str(data.get("ncm_version", NCM_SCHEMA_VERSION)),
     )
+
+
+@dataclass(frozen=True)
+class Relationship:
+    """Unified static-reference edge derived from NCM concepts.
+
+    This is a read-only view, not duplicate storage: ``import`` edges mirror
+    ``ImportRef`` records, ``call`` edges mirror ``CallSite`` records.
+    Class bases stay names-only on ``ClassDef`` (unresolvable bases are
+    recorded as unknown, never fabricated into edges).
+    Call targets are always ``unresolved`` here — a callee name is evidence
+    text, not an established target (resolution belongs to graph analysis).
+    """
+
+    id: str
+    source_id: str
+    target_text: str
+    kind: str  # import | call | reference
+    location: SourceLocation | None
+    resolution: str  # internal | external | unresolved
+
+
+def derive_relationships(module: NormalizedModule) -> list[Relationship]:
+    """Derive unified edges from one module, in stable encounter order.
+
+    Only relationships that can actually be established are created;
+    anything else stays an ``unresolved`` reference, never a fabricated
+    target (docs/12 §11.4, ARCH-REQ-015).
+    """
+    relationships: list[Relationship] = []
+    for index, imp in enumerate(module.imports):
+        relationships.append(
+            Relationship(
+                id=f"{module.file_path}:rel:import:{index}",
+                source_id=module.module.id,
+                target_text=imp.target_text,
+                kind="import",
+                location=imp.location,
+                resolution=imp.resolution,
+            )
+        )
+    for index, call in enumerate(module.calls):
+        relationships.append(
+            Relationship(
+                id=f"{module.file_path}:rel:call:{index}",
+                source_id=call.function_id or module.module.id,
+                target_text=call.callee_text,
+                kind="call",
+                location=call.location,
+                resolution="unresolved",
+            )
+        )
+    return relationships
+
+
+@dataclass(frozen=True)
+class NcmFileEntry:
+    """One indexed file's parse outcome: module present iff successfully parsed."""
+
+    path: str
+    language: str | None
+    parse_state: str  # parsed | parsed_with_diagnostics | failed | unsupported
+    module: NormalizedModule | None
+
+
+@dataclass
+class NcmRepository:
+    """Analysis-scoped NCM container: repository → files → modules.
+
+    Identity resolves through ``analysis_id`` (no duplicated repository
+    identity system, no host paths). ``completeness`` is ``"complete"``
+    only when every file is fully represented; anything failed,
+    unsupported, or partial makes the repository ``"incomplete"`` with
+    explicit reasons — never clean by omission.
+    """
+
+    analysis_id: str
+    files: list[NcmFileEntry] = field(default_factory=list)
+
+    @property
+    def modules(self) -> list[NormalizedModule]:
+        """Modules actually represented (failed/unsupported files contribute none)."""
+        return [entry.module for entry in self.files if entry.module is not None]
+
+    @property
+    def fully_represented_modules(self) -> list[NormalizedModule]:
+        """Modules safe for full-confidence downstream use."""
+        return [m for m in self.modules if m.completeness == "fully"]
+
+    @property
+    def completeness(self) -> str:
+        """``complete`` or ``incomplete`` — never inferred from findings."""
+        for entry in self.files:
+            if entry.module is None or entry.module.completeness != "fully":
+                return "incomplete"
+        return "complete"
+
+    @property
+    def incomplete_reasons(self) -> list[str]:
+        """Deterministic per-state reasons for incomplete representation."""
+        reasons: list[str] = []
+        for entry in sorted(self.files, key=lambda e: e.path):
+            if entry.module is None:
+                reasons.append(f"{entry.parse_state}: {entry.path}")
+            elif entry.module.completeness != "fully":
+                reasons.append(f"partial: {entry.path}")
+        return reasons
+
+
+def repository_to_dict(repository: NcmRepository) -> dict[str, object]:
+    """Serialize a repository container (round-trips through JSON)."""
+    return {
+        "analysis_id": repository.analysis_id,
+        "files": [
+            {
+                "path": entry.path,
+                "language": entry.language,
+                "parse_state": entry.parse_state,
+                "module": ncm_to_dict(entry.module) if entry.module is not None else None,
+            }
+            for entry in repository.files
+        ],
+    }
+
+
+def repository_from_dict(data: dict[str, object]) -> NcmRepository:
+    """Rebuild a repository container (modules revalidated, never trusted raw)."""
+    files_data = data.get("files", [])
+    assert isinstance(files_data, list)
+    files: list[NcmFileEntry] = []
+    for item in files_data:
+        assert isinstance(item, dict)
+        module_data = item.get("module")
+        files.append(
+            NcmFileEntry(
+                path=str(item["path"]),
+                language=str(item["language"]) if item.get("language") is not None else None,
+                parse_state=str(item["parse_state"]),
+                module=ncm_from_dict(module_data) if isinstance(module_data, dict) else None,
+            )
+        )
+    return NcmRepository(analysis_id=str(data["analysis_id"]), files=files)

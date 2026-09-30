@@ -13,9 +13,9 @@ from typing import Any
 
 import pytest
 
+from app.ncm import ParseState
 from app.parsers.base import ParserInput
 from app.parsers.python_ast import PythonAstAdapter
-from app.parsers.result import ParseState
 from app.parsers.runner import run_adapter
 from app.parsers.tree_sitter import TreeSitterAdapter
 from tests.fixtures.helpers.canary import assert_canary_absent, fixture_contains_canary_payload

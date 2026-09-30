@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from app.parsers.result import ParseState
+from app.ncm import ParseState
 from app.parsers.runner import backend_root, build_worker_command, run_adapter
 
 pytestmark = pytest.mark.security

@@ -12,8 +12,7 @@ from __future__ import annotations
 import sys
 import time
 
-from app.parsers.base import ParserAdapter, ParserInput
-from app.parsers.ncm import (
+from app.ncm import (
     Assignment,
     CallSite,
     ClassDef,
@@ -25,10 +24,12 @@ from app.parsers.ncm import (
     NcmModule,
     NormalizedModule,
     Parameter,
+    ParseResult,
+    ParseState,
     SourceLocation,
     UnresolvedRef,
 )
-from app.parsers.result import ParseResult, ParseState
+from app.parsers.base import ParserAdapter, ParserInput
 
 ADAPTER_NAME = "tree-sitter"
 MAX_DIAGNOSTIC_MESSAGE = 500
@@ -462,7 +463,15 @@ def _normalize(file_path: str, language: str, source: bytes, root, parser: str, 
                 module_text = _node_text(module_node, source) if module_node is not None else ""
                 relative = any(c.type == "relative_import" for c in node.children)
                 imported: list[str] = []
-                for child in node.named_children:
+                # Only names after the `import` keyword are imported symbols;
+                # the module part before it must not be double-counted.
+                seen_import_keyword = False
+                for child in node.children:
+                    if child.type == "import":
+                        seen_import_keyword = True
+                        continue
+                    if not seen_import_keyword:
+                        continue
                     if child.type == "dotted_name":
                         imported.append(_node_text(child, source))
                     elif child.type == "aliased_import":

@@ -20,8 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from app.parsers.ncm import Diagnostic
-from app.parsers.result import ParseResult, ParseState
+from app.ncm import Diagnostic, ParseResult, ParseState
 
 
 def backend_root() -> Path:

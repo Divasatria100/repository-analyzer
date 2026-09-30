@@ -6,9 +6,8 @@ concrete adapters prove the contract holds for real parsers.
 
 import pytest
 
+from app.ncm import NCM_SCHEMA_VERSION, NormalizedModule, ParseResult, ParseState, SourceLocation
 from app.parsers.base import ParserAdapter, ParserInput
-from app.parsers.ncm import NCM_SCHEMA_VERSION, NormalizedModule, SourceLocation
-from app.parsers.result import ParseResult, ParseState
 
 
 class StubAdapter(ParserAdapter):
@@ -20,7 +19,7 @@ class StubAdapter(ParserAdapter):
 
     def parse(self, data: ParserInput) -> ParseResult:
         """Return an empty but well-formed module."""
-        from app.parsers.ncm import NcmModule
+        from app.ncm import NcmModule
 
         assert len(data.source) <= data.max_bytes
         module = NcmModule(
@@ -66,13 +65,13 @@ def test_state_vocabulary_is_lowercase() -> None:
 
 
 def test_result_roundtrip_preserves_ncm() -> None:
-    from app.parsers.ncm import (
+    from app.ncm import (
         FunctionDef,
         ImportRef,
         NcmModule,
         NormalizedModule,
     )
-    from app.parsers.result import ParseResult as Result
+    from app.ncm import ParseResult as Result
 
     location = SourceLocation("a.py", 1, 0, 2, 5)
     ncm = NormalizedModule(

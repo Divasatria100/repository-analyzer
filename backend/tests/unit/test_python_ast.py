@@ -2,9 +2,9 @@
 
 import pytest
 
+from app.ncm import ParseResult, ParseState
 from app.parsers.base import ParserInput
 from app.parsers.python_ast import PythonAstAdapter
-from app.parsers.result import ParseResult, ParseState
 from tests.fixtures.helpers.paths import read_fixture_bytes
 
 pytestmark = pytest.mark.security

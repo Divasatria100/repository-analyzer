@@ -15,8 +15,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-from app.parsers.base import ParserAdapter, ParserInput
-from app.parsers.ncm import (
+from app.ncm import (
     Assignment,
     CallSite,
     ClassDef,
@@ -28,10 +27,12 @@ from app.parsers.ncm import (
     NcmModule,
     NormalizedModule,
     Parameter,
+    ParseResult,
+    ParseState,
     SourceLocation,
     UnresolvedRef,
 )
-from app.parsers.result import ParseResult, ParseState
+from app.parsers.base import ParserAdapter, ParserInput
 
 ADAPTER_NAME = "python-ast"
 MAX_DIAGNOSTIC_MESSAGE = 500

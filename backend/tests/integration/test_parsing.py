@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import load_settings
 from app.models import repository as _repository_models  # noqa: F401 (register tables)
+from app.ncm import ParseState
 from app.parsers.pipeline import ParsePhaseResult, run_parse_phase
-from app.parsers.result import ParseState
 from app.repositories import indexing as gateway
 from app.repository.index_types import IndexedFile
 from app.repository.workspace import WorkspaceManager
@@ -164,4 +164,40 @@ def test_update_parse_result_rejects_bad_states() -> None:
             with pytest.raises(ValueError):
                 gateway.update_parse_result(session, "missing-id", ParseState.PARSED, [])
     finally:
+        engine.dispose()
+
+
+def test_pipeline_repository_container_mixed_states(tmp_path) -> None:
+    """ParsePhaseResult.repository reflects parsed/failed/unsupported jointly."""
+    files = {
+        "good.py": b"def ok():\n    return 1\n",
+        "broken.py": b"def broken(:\n",
+        "notes.js": b"var x = 1;\n",
+    }
+    rows = [
+        _file("good.py"),
+        _file("broken.py"),
+        _file(
+            "notes.js",
+            file_type="source",
+            extension="js",
+            language="javascript",
+            support_status="unsupported",
+            eligibility="not_eligible",
+            eligibility_reason="language javascript not supported for source analysis",
+        ),
+    ]
+    summary, session, engine = _run(tmp_path, files, rows)
+    try:
+        assert summary.repository is not None
+        assert summary.repository.analysis_id == "a1"
+        assert summary.repository.completeness == "incomplete"
+        assert summary.repository.incomplete_reasons == [
+            "failed: broken.py",
+            "unsupported: notes.js",
+        ]
+        assert [m.file_path for m in summary.repository.modules] == ["good.py"]
+        assert summary.repository.fully_represented_modules == list(summary.repository.modules)
+    finally:
+        session.close()
         engine.dispose()

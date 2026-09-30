@@ -21,9 +21,8 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.logging import get_logger, log_event, log_exception
 from app.models.indexing import File
-from app.parsers.ncm import NormalizedModule
+from app.ncm import NcmFileEntry, NcmRepository, NormalizedModule, ParseResult, ParseState
 from app.parsers.registry import get_adapter
-from app.parsers.result import ParseResult, ParseState
 from app.parsers.runner import run_adapter
 from app.repositories import indexing as gateway
 from app.repository.workspace import WorkspaceManager
@@ -42,6 +41,7 @@ class ParsePhaseResult:
     unsupported: int = 0
     duration_ms: float = 0.0
     modules: dict[str, NormalizedModule] = field(default_factory=dict)
+    repository: NcmRepository | None = None
 
 
 def _adapter_name_for(language: str | None) -> str | None:
@@ -64,6 +64,7 @@ def run_parse_phase(
     max_bytes = operational.file_max_size_bytes
     timeout_s = operational.parse_file_timeout_s
     result = ParsePhaseResult()
+    entries: list[NcmFileEntry] = []
     try:
         files = gateway.get_files(session, analysis_id)
     except Exception as exc:
@@ -89,6 +90,15 @@ def run_parse_phase(
             result.unsupported += 1
         if parsed.ncm is not None:
             result.modules[row.id] = parsed.ncm
+        entries.append(
+            NcmFileEntry(
+                path=row.path,
+                language=row.language,
+                parse_state=parsed.state.value,
+                module=parsed.ncm,
+            )
+        )
+    result.repository = NcmRepository(analysis_id=analysis_id, files=entries)
     # Second pass over persisted rows is unnecessary: modules were collected
     # from worker results held in memory during this run.
     result.duration_ms = (time.perf_counter() - started) * 1000.0
@@ -107,7 +117,7 @@ def run_parse_phase(
 
 
 def _synthetic(adapter_name: str, state: ParseState, message: str, code: str) -> ParseResult:
-    from app.parsers.ncm import Diagnostic
+    from app.ncm import Diagnostic
 
     return ParseResult(
         state=state,
