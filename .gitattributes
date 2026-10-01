@@ -1,0 +1,5 @@
+# RepoLens test fixtures under /fixtures are compared byte-for-byte in tests
+# (see backend/tests/unit/test_helpers.py::test_read_fixture_as_data), so they
+# must check out with identical bytes on every platform. Force LF line endings
+# for this tree; this overrides core.autocrlf on Windows checkouts.
+/fixtures/** text eol=lf
