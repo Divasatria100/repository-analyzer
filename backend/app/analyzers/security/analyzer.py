@@ -1,6 +1,6 @@
-"""Security analyzer execution pipeline (TASK-094).
+"""Security analyzer execution pipeline (TASK-094, extended Phase 8).
 
-The ``security`` analyzer runs the four registered V1.0 injection rules
+The ``security`` analyzer runs the nine registered V1.0 rules
 through the existing Phase 6 machinery:
 
 * identity via :class:`app.analyzers.base.Analyzer` (``id = "security"``),
@@ -32,9 +32,14 @@ from app.analyzers.security.metadata import (
 )
 from app.analyzers.security.rules import (
     command_injection,
+    cors,
+    crypto,
+    deserialization,
+    dynamic_execution,
     path_traversal,
     sql_injection,
     ssrf,
+    tls,
 )
 from app.analyzers.security.source import SourceProvider
 from app.analyzers.versioning import RULE_SET_VERSION
@@ -70,6 +75,11 @@ _RULE_RUNNERS = (
     command_injection.execute_command_injection,
     path_traversal.execute_path_traversal,
     ssrf.execute_ssrf,
+    deserialization.execute_unsafe_deserialization,
+    dynamic_execution.execute_dangerous_dynamic_execution,
+    crypto.execute_weak_crypto,
+    tls.execute_disabled_tls,
+    cors.execute_insecure_cors,
 )
 
 
@@ -126,8 +136,14 @@ def _sinks_present(ncm: NcmRepository, spec: SecurityRuleSpec) -> bool:
     """True when any supported-language call site matches the rule's sinks."""
     from app.analyzers.security.sinks import (
         COMMAND_SINKS,
+        CORS_MIDDLEWARE_SINKS,
+        CRYPTO_SINKS,
+        DESERIALIZATION_SINKS,
+        DYNAMIC_EXEC_SINKS,
         PATH_SINKS,
+        RANDOM_SINKS,
         SSRF_SINKS,
+        TLS_CALL_SINKS,
         callee_matches,
         sql_sink_match,
     )
@@ -150,5 +166,22 @@ def _sinks_present(ncm: NcmRepository, spec: SecurityRuleSpec) -> bool:
                     return True
             elif spec.rule_id == "SEC-SSRF":
                 if callee_matches(callee, SSRF_SINKS, import_targets):
+                    return True
+            elif spec.rule_id == "SEC-UNSAFE-DESERIALIZATION":
+                if callee_matches(callee, DESERIALIZATION_SINKS, import_targets):
+                    return True
+            elif spec.rule_id == "SEC-DANGEROUS-DYNAMIC-EXECUTION":
+                if callee_matches(callee, DYNAMIC_EXEC_SINKS, import_targets):
+                    return True
+            elif spec.rule_id == "SEC-WEAK-CRYPTO":
+                if callee_matches(callee, CRYPTO_SINKS, import_targets):
+                    return True
+                if callee_matches(callee, RANDOM_SINKS, import_targets):
+                    return True
+            elif spec.rule_id == "SEC-DISABLED-TLS":
+                if callee_matches(callee, TLS_CALL_SINKS, import_targets):
+                    return True
+            elif spec.rule_id == "SEC-INSECURE-CORS":
+                if callee_matches(callee, CORS_MIDDLEWARE_SINKS, import_targets):
                     return True
     return False

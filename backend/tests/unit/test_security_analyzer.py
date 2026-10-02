@@ -38,13 +38,18 @@ def test_analyzer_identity_is_stable() -> None:
 
 
 def test_rules_come_from_registry_in_deterministic_order() -> None:
-    """Four V1.0 injection rules, sorted by rule ID (no hard-coded chain)."""
+    """Nine V1.0 rules, sorted by rule ID (no hard-coded chain)."""
     rules = build_security_rules(DictSourceProvider({}))
     assert [rule.metadata.rule_id for rule in rules] == [
         "SEC-COMMAND-INJECTION",
+        "SEC-DANGEROUS-DYNAMIC-EXECUTION",
+        "SEC-DISABLED-TLS",
+        "SEC-INSECURE-CORS",
         "SEC-PATH-TRAVERSAL",
         "SEC-SQL-INJECTION",
         "SEC-SSRF",
+        "SEC-UNSAFE-DESERIALIZATION",
+        "SEC-WEAK-CRYPTO",
     ]
     assert all(rule.metadata.analyzer_id == "security" for rule in rules)
 
@@ -55,9 +60,14 @@ def test_analyzer_runs_only_security_rules() -> None:
     assert result.rule_results
     assert {item.rule_id for item in result.rule_results} == {
         "SEC-COMMAND-INJECTION",
+        "SEC-DANGEROUS-DYNAMIC-EXECUTION",
+        "SEC-DISABLED-TLS",
+        "SEC-INSECURE-CORS",
         "SEC-PATH-TRAVERSAL",
         "SEC-SQL-INJECTION",
         "SEC-SSRF",
+        "SEC-UNSAFE-DESERIALIZATION",
+        "SEC-WEAK-CRYPTO",
     }
     assert all(finding.category == "security" for finding in result.findings)
 

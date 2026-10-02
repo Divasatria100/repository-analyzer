@@ -42,7 +42,7 @@ from app.analyzers.security.source import (
     balanced_span,
     structure_mask,
 )
-from app.ncm import CallSite, FunctionDef, NormalizedModule
+from app.ncm import CallSite, FunctionDef, NormalizedModule, SourceLocation
 
 #: Identifier for findings whose flow could not be fully resolved.
 UNRESOLVED_NOTE = "The value origin could not be fully resolved; treated as unresolved."
@@ -193,22 +193,27 @@ def _scope_text(lines: list[str], focus_line: int, scope_start: int | None) -> s
     return "\n".join(lines[start:end])
 
 
-def make_finding(
+def make_location_finding(
     *,
     spec: SecurityRuleSpec,
     analyzer_version: str,
     rule_set_version: str,
     analysis_id: str,
-    sink: SinkCall,
+    location: SourceLocation,
+    lines: tuple[str, ...] | list[str] | None,
     verdict: EvaluatedSink,
+    partial: bool,
 ) -> Finding:
-    """Build one validated finding with deterministic identity + evidence."""
-    location = sink.call.location
+    """Build one validated finding at an NCM location (call or assignment).
+
+    Shared by call-driven and assignment-driven verdicts so both carry
+    identical evidence, limitation, identity, and redaction semantics.
+    """
     evidence = build_security_evidence(
         path=location.file_path,
         focus_start_line=location.start_line,
         focus_end_line=location.end_line,
-        lines=sink.source.lines if sink.source is not None else None,
+        lines=lines,
     )
     limitations = list(verdict.limitations)
     if evidence is None:
@@ -221,7 +226,7 @@ def make_finding(
                 rule_id=spec.rule_id,
             )
         )
-    if sink.partial:
+    if partial:
         limitations.append(
             Limitation(
                 scope=f"security:{spec.rule_id}",
@@ -250,6 +255,28 @@ def make_finding(
         confidence_factors=verdict.confidence_factors,
         analysis_id=analysis_id,
         subject_key=verdict.subject_key,
+    )
+
+
+def make_finding(
+    *,
+    spec: SecurityRuleSpec,
+    analyzer_version: str,
+    rule_set_version: str,
+    analysis_id: str,
+    sink: SinkCall,
+    verdict: EvaluatedSink,
+) -> Finding:
+    """Build one validated finding with deterministic identity + evidence."""
+    return make_location_finding(
+        spec=spec,
+        analyzer_version=analyzer_version,
+        rule_set_version=rule_set_version,
+        analysis_id=analysis_id,
+        location=sink.call.location,
+        lines=sink.source.lines if sink.source is not None else None,
+        verdict=verdict,
+        partial=sink.partial,
     )
 
 
@@ -398,6 +425,32 @@ def run_rule_with_sinks(
             )
         )
     return RuleOutcome(findings=dedupe_findings(findings), limitations=limitations), coverage
+
+
+def merge_extra_findings(
+    *,
+    spec: SecurityRuleSpec,
+    execution_context: RuleExecutionContext,
+    outcome: RuleOutcome,
+    coverage: Coverage,
+    extra: list[Finding],
+) -> tuple[RuleOutcome, Coverage]:
+    """Merge non-call findings (assignments, header patterns) into an outcome.
+
+    Findings are re-deduplicated with the existing mechanism; when the
+    extra findings are the only sink evidence, coverage is recomputed
+    from ``not_applicable`` so the rule never reads as clean-by-omission.
+    """
+    if not extra:
+        return outcome, coverage
+    findings = dedupe_findings([*outcome.findings, *extra])
+    if coverage.status is CoverageStatus.NOT_APPLICABLE:
+        coverage = coverage_for(
+            spec.rule_id,
+            summarize_scope(execution_context.context.ncm),
+            sinks_found=True,
+        )
+    return RuleOutcome(findings=findings, limitations=outcome.limitations), coverage
 
 
 SHELL_TRUE_RE = re.compile(r"\bshell\s*=\s*True\b")

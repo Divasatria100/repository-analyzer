@@ -135,3 +135,48 @@ def test_pipeline_broken_file_is_not_clean(tmp_path: Path) -> None:
     finally:
         session.close()
         engine.dispose()
+
+
+PHASE8_APP = (
+    b"import hashlib\n"
+    b"import pickle\n"
+    b"import requests\n"
+    b"from fastapi.middleware.cors import CORSMiddleware\n"
+    b"\n"
+    b"def handle(request, password):\n"
+    b"    obj = pickle.loads(request.body())\n"
+    b"    digest = hashlib.md5(password.encode()).hexdigest()\n"
+    b"    requests.get(request.args['url'], verify=False)\n"
+    b"    return eval(request.args['expr'])\n"
+    b"\n"
+    b"def configure(app):\n"
+    b"    app.add_middleware(CORSMiddleware, allow_origins=['*'])\n"
+)
+
+
+def test_pipeline_phase8_rules_end_to_end(tmp_path: Path) -> None:
+    """All five new rules fire through index → parse → NCM → analyzer."""
+    summary, session, engine, workspace = _run(tmp_path, {"app.py": PHASE8_APP})
+    try:
+        persisted = {row.path: row for row in gateway.get_files(session, "a1")}
+        assert persisted["app.py"].parse_result == "parsed"
+        assert summary.repository is not None
+        result = _analyze(summary.repository, workspace, ["app.py"])
+        assert result.failed is False
+        rule_ids = {finding.rule_id for finding in result.findings}
+        assert {
+            "SEC-UNSAFE-DESERIALIZATION",
+            "SEC-DANGEROUS-DYNAMIC-EXECUTION",
+            "SEC-WEAK-CRYPTO",
+            "SEC-DISABLED-TLS",
+            "SEC-INSECURE-CORS",
+        } <= rule_ids
+        for finding in result.findings:
+            assert finding.evidence is not None
+            assert finding.recommendation
+            assert finding.analyzer_version
+            assert finding.rule_set_version
+        assert_canary_absent()
+    finally:
+        session.close()
+        engine.dispose()

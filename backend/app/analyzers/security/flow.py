@@ -214,7 +214,12 @@ def _looks_literal(rhs: str) -> bool:
     masked = mask_strings(strip_comment(rhs)).strip()
     if not masked:
         return False
-    if re.fullmatch(r"[\"']{2}|[\"'][^\"']*[\"']|\d[\d._]*|True|False|None", masked):
+    # Optional bytes/str prefix (b/r/u, never f: interpolated strings stay dynamic).
+    if re.fullmatch(
+        r"(?:[bBrRuU]{1,2})?[\"']{2}|(?:[bBrRuU]{1,2})?[\"'][^\"']*[\"']"
+        r"|\d[\d._]*|True|False|None",
+        masked,
+    ):
         return True
     if re.fullmatch(r"[\[\(\{][\"'\d\s,\.\-+:TrueFalsNone]*[\]\)\}]", masked):
         return True

@@ -18,17 +18,33 @@ from tests.fixtures.helpers.analyzer_helpers import make_context, make_module
 from tests.fixtures.helpers.security_helpers import analyze_files, parse_files
 
 
-def test_all_four_rules_have_complete_metadata() -> None:
-    """Every V1.0 injection rule declares the full metadata contract."""
+def test_all_rules_have_complete_metadata() -> None:
+    """Every V1.0 security rule declares the full metadata contract."""
     assert {spec.rule_id for spec in SECURITY_RULE_SPECS} == {
         "SEC-SQL-INJECTION",
         "SEC-COMMAND-INJECTION",
         "SEC-PATH-TRAVERSAL",
         "SEC-SSRF",
+        "SEC-UNSAFE-DESERIALIZATION",
+        "SEC-DANGEROUS-DYNAMIC-EXECUTION",
+        "SEC-WEAK-CRYPTO",
+        "SEC-DISABLED-TLS",
+        "SEC-INSECURE-CORS",
+    }
+    expected_subcategories = {
+        "SEC-SQL-INJECTION": "injection",
+        "SEC-COMMAND-INJECTION": "injection",
+        "SEC-PATH-TRAVERSAL": "injection",
+        "SEC-SSRF": "injection",
+        "SEC-UNSAFE-DESERIALIZATION": "injection",
+        "SEC-DANGEROUS-DYNAMIC-EXECUTION": "injection",
+        "SEC-WEAK-CRYPTO": "cryptography",
+        "SEC-DISABLED-TLS": "transport-security",
+        "SEC-INSECURE-CORS": "configuration",
     }
     for spec in SECURITY_RULE_SPECS:
         assert spec.name.strip()
-        assert spec.subcategory == "injection"
+        assert spec.subcategory == expected_subcategories[spec.rule_id]
         assert spec.description.strip()
         assert spec.default_severity in ("Critical", "High", "Medium", "Low", "Info")
         assert spec.supported_languages == ("python",)

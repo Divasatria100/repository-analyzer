@@ -1,4 +1,4 @@
-"""Shared sink tables for security injection rules (TASK-097–100 support).
+"""Shared sink tables for security rules (TASK-097–105 support).
 
 One table per rule maps NCM ``callee_text`` values (dotted names as
 written, e.g. ``cursor.execute``) to sink candidacy. Rules add their own
@@ -194,6 +194,174 @@ def receiver_of(callee: str) -> str:
     """The dotted receiver prefix of a call (``""`` for bare names)."""
     head, dot, _ = callee.rpartition(".")
     return head if dot else ""
+
+
+DESERIALIZATION_SINKS = SinkSpec(
+    suffixes=(
+        "pickle.loads",
+        "pickle.load",
+        "_pickle.loads",
+        "_pickle.load",
+        "cPickle.loads",
+        "cPickle.load",
+        "marshal.loads",
+        "marshal.load",
+        "shelve.open",
+        "yaml.unsafe_load",
+    ),
+    guarded_suffixes=(
+        ".loads",
+        ".load",
+        ".unsafe_load",
+    ),
+    bare_names=("loads", "load", "unsafe_load"),
+    import_hints=("pickle", "_pickle", "cPickle", "marshal", "shelve", "yaml", "ruamel.yaml"),
+)
+
+#: Callee shapes that are data-only deserialization (never unsafe sinks).
+SAFE_DESERIALIZATION_CALLEES = frozenset(
+    {
+        "json.loads",
+        "json.load",
+        "yaml.safe_load",
+        "yaml.safe_load_all",
+        "yaml.full_load",
+    }
+)
+
+#: yaml.load is unsafe only with an object-constructing loader.
+YAML_UNSAFE_LOADERS = ("UnsafeLoader", "Loader", "FullLoader")
+YAML_SAFE_LOADERS = ("SafeLoader", "CSafeLoader", "BaseLoader")
+
+DYNAMIC_EXEC_SINKS = SinkSpec(
+    direct_names=("eval", "exec", "compile", "__import__"),
+)
+
+#: Callee shapes that look dynamic but belong to other rules (never this one).
+DYNAMIC_EXEC_EXCLUSIONS = frozenset(
+    {
+        "ast.literal_eval",
+        "literal_eval",
+    }
+)
+
+CRYPTO_SINKS = SinkSpec(
+    suffixes=(
+        "hashlib.md5",
+        "hashlib.sha1",
+        "hashlib.new",
+        "Crypto.Hash.MD5.new",
+        "Crypto.Hash.SHA.new",
+        "Crypto.Hash.SHA1.new",
+        "Cryptodome.Hash.MD5.new",
+        "Cryptodome.Hash.SHA.new",
+        "Cryptodome.Hash.SHA1.new",
+        "Crypto.Cipher.DES.new",
+        "Crypto.Cipher.DES3.new",
+        "Crypto.Cipher.ARC4.new",
+        "Crypto.Cipher.ARC2.new",
+        "Cryptodome.Cipher.DES.new",
+        "Cryptodome.Cipher.DES3.new",
+        "Cryptodome.Cipher.ARC4.new",
+        "Cryptodome.Cipher.ARC2.new",
+    ),
+    guarded_suffixes=(
+        ".md5",
+        ".sha1",
+        ".new",
+    ),
+    bare_names=("md5", "sha1"),
+    import_hints=("hashlib", "Crypto", "Cryptodome", "cryptography"),
+)
+
+#: Weak hash names recognized inside ``hashlib.new(...)`` literals.
+WEAK_HASH_NAMES = frozenset({"md5", "sha1", "sha"})
+
+#: Strong hash names that must never be reported by this rule.
+STRONG_HASH_NAMES = frozenset(
+    {
+        "sha256",
+        "sha384",
+        "sha512",
+        "sha224",
+        "sha3_224",
+        "sha3_256",
+        "sha3_384",
+        "sha3_512",
+        "blake2b",
+        "blake2s",
+        "shake_128",
+        "shake_256",
+    }
+)
+
+#: Non-cryptographic random generators (stdlib ``random`` only).
+RANDOM_SINKS = SinkSpec(
+    suffixes=(
+        "random.random",
+        "random.choice",
+        "random.choices",
+        "random.randint",
+        "random.randrange",
+        "random.uniform",
+        "random.sample",
+        "random.shuffle",
+    ),
+)
+
+TLS_CALL_SINKS = SinkSpec(
+    suffixes=(
+        "requests.get",
+        "requests.post",
+        "requests.put",
+        "requests.delete",
+        "requests.head",
+        "requests.options",
+        "requests.patch",
+        "requests.request",
+        "httpx.get",
+        "httpx.post",
+        "httpx.put",
+        "httpx.delete",
+        "httpx.head",
+        "httpx.options",
+        "httpx.patch",
+        "httpx.request",
+        "urllib3.request",
+        "urllib3.urlopen",
+        "ssl._create_unverified_context",
+        "ssl.SSLContext",
+        "ssl.wrap_socket",
+        "aiohttp.TCPConnector",
+    ),
+    guarded_suffixes=(
+        ".get",
+        ".post",
+        ".request",
+        ".urlopen",
+        "._create_unverified_context",
+        ".SSLContext",
+        ".wrap_socket",
+        ".TCPConnector",
+    ),
+    bare_names=(
+        "get",
+        "post",
+        "request",
+        "urlopen",
+        "SSLContext",
+        "wrap_socket",
+        "TCPConnector",
+    ),
+    import_hints=("requests", "httpx", "urllib3", "ssl", "aiohttp"),
+)
+
+CORS_MIDDLEWARE_SINKS = SinkSpec(
+    suffixes=("CORSMiddleware",),
+    guarded_suffixes=(".CORSMiddleware", ".add_middleware"),
+    bare_names=("CORSMiddleware", "add_middleware"),
+    import_hints=("fastapi", "starlette"),
+)
 
 
 def sql_sink_match(callee: str, import_targets: frozenset[str]) -> bool:

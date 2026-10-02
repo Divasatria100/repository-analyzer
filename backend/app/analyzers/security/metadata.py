@@ -206,11 +206,198 @@ SSRF_SPEC = SecurityRuleSpec(
     ),
 )
 
+UNSAFE_DESERIALIZATION_SPEC = SecurityRuleSpec(
+    rule_id="SEC-UNSAFE-DESERIALIZATION",
+    name="Unsafe Deserialization",
+    subcategory="injection",
+    description=(
+        "Detects potential unsafe deserialization where externally influenced, "
+        "unresolved, or insufficiently trusted serialized data reaches a "
+        "deserialization mechanism capable of arbitrary object construction "
+        "(pickle/marshal families, shelve, unsafe YAML loaders). Data-only "
+        "formats such as JSON and safe YAML loaders are never reported. "
+        "Findings are potential issues for review, not confirmed exploits."
+    ),
+    default_severity="High",
+    severity_range="Medium to Critical",
+    supported_languages=SECURITY_SUPPORTED_LANGUAGES,
+    supported_sinks=(
+        "pickle.loads/load, marshal.loads/load, shelve.open, "
+        "yaml.unsafe_load and yaml.load without a safe loader",
+    ),
+    supported_sources=(
+        "sys.argv, input()/stdin, socket reads, request-derived values, "
+        "locally propagated variables, function parameters (unresolved)",
+    ),
+    coverage_notes=(
+        "Python only. Limited to the rule-set deserialization mechanisms; "
+        "custom frameworks, integrity checks elsewhere, and caller-side "
+        "validation stay unresolved. Requires bounded source access around "
+        "NCM call sites."
+    ),
+    recommendation=(
+        "Review where the serialized data originates. Where it may be "
+        "untrusted, avoid object-capable pickle/marshal deserialization, "
+        "prefer a data-only format such as JSON or a YAML loader limited to "
+        "plain data, and verify integrity before deserializing data that "
+        "must use a richer format."
+    ),
+)
+
+DANGEROUS_DYNAMIC_EXECUTION_SPEC = SecurityRuleSpec(
+    rule_id="SEC-DANGEROUS-DYNAMIC-EXECUTION",
+    name="Dangerous Dynamic Execution",
+    subcategory="injection",
+    description=(
+        "Detects potential dangerous dynamic execution where externally "
+        "influenced or unresolved content reaches eval, exec, compile, or "
+        "dynamic module loading. Static constant expressions are reported at "
+        "most at Info severity; ast.literal_eval, SQL execution, and command "
+        "execution belong to other rules and are never reported here. "
+        "Detected code is never executed by the analyzer."
+    ),
+    default_severity="High",
+    severity_range="Low to Critical",
+    supported_languages=SECURITY_SUPPORTED_LANGUAGES,
+    supported_sinks=("eval(), exec(), compile(), __import__() with a dynamic name",),
+    supported_sources=(
+        "sys.argv, input()/stdin, socket reads, request-derived values, "
+        "locally propagated variables, function parameters (unresolved)",
+    ),
+    coverage_notes=(
+        "Python only. Only builtin dynamic-execution calls are recognized; "
+        "restricted-namespace evaluation elsewhere and custom loaders stay "
+        "unresolved. Requires bounded source access around NCM call sites."
+    ),
+    recommendation=(
+        "Review whether the executed content can be influenced by untrusted "
+        "input. Where it can, replace dynamic execution with explicit parsing, "
+        "allowlisted operations, structured data, safe APIs such as "
+        "ast.literal_eval for literals, or predefined dispatch tables."
+    ),
+)
+
+WEAK_CRYPTO_SPEC = SecurityRuleSpec(
+    rule_id="SEC-WEAK-CRYPTO",
+    name="Weak Cryptography",
+    subcategory="cryptography",
+    description=(
+        "Detects clearly weak cryptographic primitives where the API usage "
+        "itself provides strong evidence: MD5/SHA-1 hashing, DES/3DES/RC4 "
+        "ciphers, ECB cipher mode, and non-cryptographic randomness used for "
+        "secrets. Purpose context (password handling vs checksums) drives "
+        "severity and confidence; comments, names, and string-only mentions "
+        "are never reported."
+    ),
+    default_severity="Medium",
+    severity_range="Info to High",
+    supported_languages=SECURITY_SUPPORTED_LANGUAGES,
+    supported_sinks=(
+        "hashlib.md5/sha1/new('md5'/'sha1'), Crypto/Cryptodome MD5/SHA/DES/"
+        "DES3/ARC4 constructors, ECB cipher mode, stdlib random for secrets",
+    ),
+    supported_sources=(
+        "call arguments and surrounding purpose context (names, function "
+        "purpose, usedforsecurity markers)",
+    ),
+    coverage_notes=(
+        "Python only. Purpose is inferred from visible names and context only; "
+        "ambiguous purpose lowers confidence and requires manual review. "
+        "Key management, custom primitives, and runtime configuration are "
+        "outside static reach."
+    ),
+    recommendation=(
+        "Review the purpose of the primitive. For password hashing use a "
+        "dedicated password-hashing algorithm such as Argon2id, bcrypt, or "
+        "scrypt; for integrity/security hashing use SHA-256 or stronger "
+        "modern constructions; for encryption use authenticated modern "
+        "encryption schemes. Algorithm choice depends on purpose."
+    ),
+)
+
+DISABLED_TLS_SPEC = SecurityRuleSpec(
+    rule_id="SEC-DISABLED-TLS",
+    name="Disabled or Weakened TLS Verification",
+    subcategory="transport-security",
+    description=(
+        "Detects explicit TLS verification disabling in recognized Python "
+        "HTTP-client and ssl APIs: verify=False, session.verify = False, "
+        "unverified SSL contexts, CERT_NONE, disabled hostname checking, and "
+        "obsolete protocol versions. Similarly named options in unrecognized "
+        "APIs are never reported. Requests are never sent."
+    ),
+    default_severity="Medium",
+    severity_range="Low to High",
+    supported_languages=SECURITY_SUPPORTED_LANGUAGES,
+    supported_sinks=(
+        "requests/httpx/urllib3 verify=False, session.verify = False, "
+        "ssl._create_unverified_context, CERT_NONE, check_hostname = False, "
+        "obsolete ssl.PROTOCOL_* versions, aiohttp TCPConnector(ssl=False)",
+    ),
+    supported_sources=(
+        "keyword arguments and attribute assignments in recognized APIs; "
+        "configuration values that remain unresolved",
+    ),
+    coverage_notes=(
+        "Python only. Only recognized APIs with known setting meanings are "
+        "reported. Runtime configuration, deployment trust stores, and which "
+        "endpoints the client contacts are unknown."
+    ),
+    recommendation=(
+        "Review whether verification is disabled outside development or test "
+        "contexts. Where it is, keep certificate verification enabled and, if "
+        "a private certificate authority is needed, configure the trusted "
+        "certificate bundle instead of disabling verification."
+    ),
+)
+
+INSECURE_CORS_SPEC = SecurityRuleSpec(
+    rule_id="SEC-INSECURE-CORS",
+    name="Insecure CORS Configuration",
+    subcategory="configuration",
+    description=(
+        "Detects clearly insecure CORS configuration: wildcard origins in "
+        "FastAPI/Starlette CORSMiddleware or CORS response headers, "
+        "especially combined with credential allowance. Explicit finite "
+        "origin allowlists are never reported. A wildcard alone never exceeds "
+        "Low severity; unresolved origin configuration stays unresolved."
+    ),
+    default_severity="Medium",
+    severity_range="Info to High",
+    supported_languages=SECURITY_SUPPORTED_LANGUAGES,
+    supported_sinks=(
+        "FastAPI/Starlette CORSMiddleware allow_origins, CORS response "
+        "headers (Access-Control-Allow-Origin) assigned in code",
+    ),
+    supported_sources=(
+        "allow_origins values, allow_credentials settings, header values, "
+        "configuration values that remain unresolved",
+    ),
+    coverage_notes=(
+        "Python only. Framework coverage is FastAPI/Starlette CORSMiddleware "
+        "plus literal CORS response-header assignments. Proxy/gateway "
+        "configuration and restrictions applied elsewhere stay unresolved."
+    ),
+    recommendation=(
+        "Review which origins need access and whether the resources involved "
+        "are sensitive or authenticated. Restrict to an explicit allow-list "
+        "of trusted origins, avoid wildcard origins for sensitive APIs, and "
+        "where credentials are involved restrict allowed methods and headers "
+        "to those needed."
+    ),
+)
+
+
 SECURITY_RULE_SPECS: tuple[SecurityRuleSpec, ...] = (
     SQL_INJECTION_SPEC,
     COMMAND_INJECTION_SPEC,
     PATH_TRAVERSAL_SPEC,
     SSRF_SPEC,
+    UNSAFE_DESERIALIZATION_SPEC,
+    DANGEROUS_DYNAMIC_EXECUTION_SPEC,
+    WEAK_CRYPTO_SPEC,
+    DISABLED_TLS_SPEC,
+    INSECURE_CORS_SPEC,
 )
 
 SPEC_BY_RULE_ID: dict[str, SecurityRuleSpec] = {spec.rule_id: spec for spec in SECURITY_RULE_SPECS}
