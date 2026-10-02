@@ -388,6 +388,122 @@ INSECURE_CORS_SPEC = SecurityRuleSpec(
 )
 
 
+SENSITIVE_LOGGING_SPEC = SecurityRuleSpec(
+    rule_id="SEC-SENSITIVE-LOGGING",
+    name="Sensitive Information in Logs",
+    subcategory="exposure",
+    description=(
+        "Detects potential sensitive information written to logs: passwords, "
+        "tokens, authorization material, and sensitive objects passed to "
+        "recognized logging APIs (stdlib logging) or print. A finding rests "
+        "on the relationship between a sensitive value and the logging "
+        "operation — never on logging alone. Masked, redacted, boolean, "
+        "length, or sliced representations are not reported, nor are "
+        "non-sensitive identifiers. Findings never include the sensitive "
+        "value itself."
+    ),
+    default_severity="Medium",
+    severity_range="Low to High",
+    supported_languages=SECURITY_SUPPORTED_LANGUAGES,
+    supported_sinks=(
+        "logging.debug/info/warning/error/exception/critical/log, "
+        "logger.<level> with a logging import, print (reduced confidence only)",
+    ),
+    supported_sources=(
+        "sensitive-named values (password, secret, tokens, authorization), "
+        "sensitive attributes/fields, request/response/header/config objects, "
+        "origins resolved through the local assignment map",
+    ),
+    coverage_notes=(
+        "Python only. Sanitization inside unrecognized helpers, log-level "
+        "configuration, and log destinations are unknown; masking done "
+        "outside the visible scope stays unresolved."
+    ),
+    recommendation=(
+        "Review whether the logged value can contain sensitive data. Where "
+        "it can, consider omitting it, logging only a non-sensitive "
+        "identifier, or masking it before logging."
+    ),
+)
+
+POTENTIAL_AUTHORIZATION_SPEC = SecurityRuleSpec(
+    rule_id="SEC-POTENTIAL-AUTHORIZATION",
+    name="Potential Missing or Inconsistent Authorization",
+    subcategory="access-control",
+    description=(
+        "Points reviewers to route handlers that perform resource-sensitive "
+        "operations without a recognizable authorization or ownership check "
+        "in the analyzed flow, using framework-independent signals only "
+        "(decorator-call route registration with a path literal, "
+        "authorization-call/condition/guard names, resource-operation calls). "
+        "Every finding states that manual review is required and never "
+        "concludes that authorization is broken. Confidence is never High."
+    ),
+    default_severity="Medium",
+    severity_range="Low to High",
+    supported_languages=SECURITY_SUPPORTED_LANGUAGES,
+    supported_sinks=(
+        "route-decorated handler functions (decorator-call registration with "
+        "a path literal); resource operations: modification calls and "
+        "identifier-driven lookup calls in handler scope",
+    ),
+    supported_sources=(
+        "handler parameters and locally propagated identifiers; "
+        "authorization signals visible in handler scope (calls, conditions, "
+        "guards, decorators)",
+    ),
+    coverage_notes=(
+        "Python only. Framework middleware, decorators, gateways, and "
+        "data-layer scoping outside the visible flow cannot be seen; public "
+        "endpoints and non-resource handlers are excluded. Authorization "
+        "intent is not derivable from structure alone."
+    ),
+    recommendation=(
+        "Review whether the operation is intended to be restricted, and if "
+        "so, whether an authorization or ownership check is enforced "
+        "consistently, including in code the analyzer could not see."
+    ),
+)
+
+HARDCODED_SECRET_SPEC = SecurityRuleSpec(
+    rule_id="SEC-HARDCODED-SECRET",
+    name="Hardcoded Secret",
+    subcategory="secrets",
+    description=(
+        "Surfaces values embedded directly in repository content that appear "
+        "to be credentials: recognized token formats, credential-shaped "
+        "values assigned to secret-like names, private key material, and "
+        "credentials in connection strings. Repository-wide content scanning "
+        "over eligible text files (any extension); binaries never scanned. "
+        "Reports potentially exposed secrets, never confirmed credentials; "
+        "values are masked before persistence."
+    ),
+    default_severity="High",
+    severity_range="Medium to Critical",
+    supported_languages=("text",),
+    supported_sinks=(
+        "eligible repository text files of any extension: source, .env-style "
+        "files, JSON, YAML, TOML, other configs, Docker/CI config, docs text",
+    ),
+    supported_sources=(
+        "literal credential values in file content: AWS-style keys, bearer "
+        "tokens, private key blocks, secret-like assignments, URL credentials",
+    ),
+    coverage_notes=(
+        "Content scanning, not language support: Python-only applies to other "
+        "rules. Binary files, undecodable files, oversize files, and .git "
+        "content are excluded with recorded reasons. Placeholders, test "
+        "fixtures markers, and environment references are not reported."
+    ),
+    recommendation=(
+        "Review whether the value is a real credential. If so, treat it as "
+        "exposed, revoke or rotate it through the credential's provider, "
+        "and move it out of the repository into a secret-management "
+        "mechanism appropriate for the project."
+    ),
+)
+
+
 SECURITY_RULE_SPECS: tuple[SecurityRuleSpec, ...] = (
     SQL_INJECTION_SPEC,
     COMMAND_INJECTION_SPEC,
@@ -398,6 +514,9 @@ SECURITY_RULE_SPECS: tuple[SecurityRuleSpec, ...] = (
     WEAK_CRYPTO_SPEC,
     DISABLED_TLS_SPEC,
     INSECURE_CORS_SPEC,
+    SENSITIVE_LOGGING_SPEC,
+    POTENTIAL_AUTHORIZATION_SPEC,
+    HARDCODED_SECRET_SPEC,
 )
 
 SPEC_BY_RULE_ID: dict[str, SecurityRuleSpec] = {spec.rule_id: spec for spec in SECURITY_RULE_SPECS}

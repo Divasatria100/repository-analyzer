@@ -33,6 +33,9 @@ FROZEN_RANGES = {
     "SEC-WEAK-CRYPTO": ("Info", "High"),
     "SEC-DISABLED-TLS": ("Low", "High"),
     "SEC-INSECURE-CORS": ("Info", "High"),
+    "SEC-SENSITIVE-LOGGING": ("Low", "High"),
+    "SEC-POTENTIAL-AUTHORIZATION": ("Low", "High"),
+    "SEC-HARDCODED-SECRET": ("Medium", "Critical"),
 }
 
 PHASE8_APP = {
@@ -59,7 +62,7 @@ def test_all_five_new_rules_fire_through_pipeline() -> None:
     result, _, _ = analyze_files(PHASE8_APP)
     assert result.failed is False
     assert set(NEW_RULE_IDS) <= {finding.rule_id for finding in result.findings}
-    assert len(result.rule_results) == 9
+    assert len(result.rule_results) == 12
 
 
 def test_new_rule_failure_does_not_stop_siblings() -> None:
@@ -162,9 +165,17 @@ def test_new_rules_report_explicit_coverage() -> None:
     quiet_coverages = {
         item.rule_id: item.status for item in quiet_analyzer.coverage(quiet_context.ncm)
     }
-    assert set(quiet_coverages.values()) == {CoverageStatus.NOT_APPLICABLE}
+    # Repository-wide secret scanning still runs (and stays silent) on this
+    # file; every other rule has no applicable sink pattern.
+    assert quiet_coverages["SEC-HARDCODED-SECRET"] is CoverageStatus.COVERED
+    assert {
+        status for rule, status in quiet_coverages.items() if rule != "SEC-HARDCODED-SECRET"
+    } == {CoverageStatus.NOT_APPLICABLE}
     for item in quiet.rule_results:
-        assert item.limitations
+        if item.rule_id == "SEC-HARDCODED-SECRET":
+            assert item.limitations == ()
+        else:
+            assert item.limitations
 
 
 def test_cross_rule_overlap_without_duplication() -> None:

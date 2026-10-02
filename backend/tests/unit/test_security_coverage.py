@@ -30,6 +30,9 @@ def test_all_rules_have_complete_metadata() -> None:
         "SEC-WEAK-CRYPTO",
         "SEC-DISABLED-TLS",
         "SEC-INSECURE-CORS",
+        "SEC-SENSITIVE-LOGGING",
+        "SEC-POTENTIAL-AUTHORIZATION",
+        "SEC-HARDCODED-SECRET",
     }
     expected_subcategories = {
         "SEC-SQL-INJECTION": "injection",
@@ -41,13 +44,19 @@ def test_all_rules_have_complete_metadata() -> None:
         "SEC-WEAK-CRYPTO": "cryptography",
         "SEC-DISABLED-TLS": "transport-security",
         "SEC-INSECURE-CORS": "configuration",
+        "SEC-SENSITIVE-LOGGING": "exposure",
+        "SEC-POTENTIAL-AUTHORIZATION": "access-control",
+        "SEC-HARDCODED-SECRET": "secrets",
+    }
+    expected_languages = {
+        "SEC-HARDCODED-SECRET": ("text",),
     }
     for spec in SECURITY_RULE_SPECS:
         assert spec.name.strip()
         assert spec.subcategory == expected_subcategories[spec.rule_id]
         assert spec.description.strip()
         assert spec.default_severity in ("Critical", "High", "Medium", "Low", "Info")
-        assert spec.supported_languages == ("python",)
+        assert spec.supported_languages == expected_languages.get(spec.rule_id, ("python",))
         assert spec.supported_sinks
         assert spec.supported_sources
         assert spec.coverage_notes.strip()
@@ -81,7 +90,12 @@ def test_unsupported_language_does_not_become_clean() -> None:
         assert item.findings == ()
         assert item.limitations, "unsupported scope must be recorded, never silent"
     coverages = {item.rule_id: item.status for item in analyzer.coverage(ncm)}
-    assert set(coverages.values()) == {CoverageStatus.UNSUPPORTED}
+    # Repository-wide secret scanning still applies to text files in any
+    # language; every other rule has no supported content here.
+    assert coverages["SEC-HARDCODED-SECRET"] is CoverageStatus.COVERED
+    assert {status for rule, status in coverages.items() if rule != "SEC-HARDCODED-SECRET"} == {
+        CoverageStatus.UNSUPPORTED
+    }
 
 
 def test_parser_failure_does_not_become_clean() -> None:
@@ -149,8 +163,14 @@ def test_not_applicable_is_explicit() -> None:
     result, context, analyzer = analyze_files({"app.py": "def add(a, b):\n    return a + b\n"})
     assert result.findings == ()
     coverages = {item.rule_id: item.status for item in analyzer.coverage(context.ncm)}
-    assert set(coverages.values()) == {CoverageStatus.NOT_APPLICABLE}
+    # Secret scanning is repository-wide: it runs (silently) on this file.
+    assert coverages["SEC-HARDCODED-SECRET"] is CoverageStatus.COVERED
+    assert {status for rule, status in coverages.items() if rule != "SEC-HARDCODED-SECRET"} == {
+        CoverageStatus.NOT_APPLICABLE
+    }
     for item in result.rule_results:
+        if item.rule_id == "SEC-HARDCODED-SECRET":
+            continue
         assert any("no applicable sink" in lim.reason for lim in item.limitations)
 
 

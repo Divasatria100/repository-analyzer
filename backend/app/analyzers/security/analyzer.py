@@ -1,6 +1,6 @@
-"""Security analyzer execution pipeline (TASK-094, extended Phase 8).
+"""Security analyzer execution pipeline (TASK-094, extended Phase 8-9).
 
-The ``security`` analyzer runs the nine registered V1.0 rules
+The ``security`` analyzer runs the twelve registered V1.0 rules
 through the existing Phase 6 machinery:
 
 * identity via :class:`app.analyzers.base.Analyzer` (``id = "security"``),
@@ -31,12 +31,15 @@ from app.analyzers.security.metadata import (
     SecurityRuleSpec,
 )
 from app.analyzers.security.rules import (
+    authorization,
     command_injection,
     cors,
     crypto,
     deserialization,
     dynamic_execution,
+    hardcoded_secret,
     path_traversal,
+    sensitive_logging,
     sql_injection,
     ssrf,
     tls,
@@ -80,6 +83,9 @@ _RULE_RUNNERS = (
     crypto.execute_weak_crypto,
     tls.execute_disabled_tls,
     cors.execute_insecure_cors,
+    sensitive_logging.execute_sensitive_logging,
+    authorization.execute_potential_authorization,
+    hardcoded_secret.execute_hardcoded_secret,
 )
 
 
@@ -111,6 +117,11 @@ class SecurityAnalyzer(Analyzer):
         scope = summarize_scope(ncm)
         coverages: list[Coverage] = []
         for spec in SECURITY_RULE_SPECS:
+            if spec.rule_id == "SEC-HARDCODED-SECRET":
+                # Content scanning is file-based, not language-based: the
+                # pre-check counts scannable entries in any language.
+                coverages.append(_secret_pre_coverage(ncm, spec))
+                continue
             if not scope.has_supported_content:
                 coverages.append(
                     Coverage(
@@ -132,14 +143,40 @@ class SecurityAnalyzer(Analyzer):
         return coverages
 
 
+def _secret_pre_coverage(ncm: NcmRepository, spec: SecurityRuleSpec) -> Coverage:
+    """File-based pre-check for repository-wide secret scanning."""
+    from app.analyzers.security.rules.hardcoded_secret import secret_entry_scannable
+
+    if not ncm.files:
+        return Coverage(
+            rule_id=spec.rule_id,
+            status=CoverageStatus.UNSUPPORTED,
+            reason="No repository files in scope; the rule did not run.",
+        )
+    if any(secret_entry_scannable(entry.path, entry.language) for entry in ncm.files):
+        return Coverage(
+            rule_id=spec.rule_id,
+            status=CoverageStatus.COVERED,
+            reason="Eligible repository text files are present for secret scanning.",
+        )
+    return Coverage(
+        rule_id=spec.rule_id,
+        status=CoverageStatus.NOT_APPLICABLE,
+        reason="No eligible text files were encountered for secret scanning.",
+    )
+
+
 def _sinks_present(ncm: NcmRepository, spec: SecurityRuleSpec) -> bool:
     """True when any supported-language call site matches the rule's sinks."""
+    from app.analyzers.security.rules.authorization import module_has_route_indicators
+    from app.analyzers.security.rules.hardcoded_secret import secret_entry_scannable
     from app.analyzers.security.sinks import (
         COMMAND_SINKS,
         CORS_MIDDLEWARE_SINKS,
         CRYPTO_SINKS,
         DESERIALIZATION_SINKS,
         DYNAMIC_EXEC_SINKS,
+        LOGGING_SINKS,
         PATH_SINKS,
         RANDOM_SINKS,
         SSRF_SINKS,
@@ -149,8 +186,18 @@ def _sinks_present(ncm: NcmRepository, spec: SecurityRuleSpec) -> bool:
     )
 
     for entry in ncm.files:
+        # File-level branches run for every entry (including non-Python and
+        # call-free files) before the Python call-site loop below.
+        if spec.rule_id == "SEC-HARDCODED-SECRET":
+            if secret_entry_scannable(entry.path, entry.language):
+                return True
+            continue
         module = entry.module
         if module is None or (module.language or "").lower() != "python":
+            continue
+        if spec.rule_id == "SEC-POTENTIAL-AUTHORIZATION":
+            if module_has_route_indicators(module):
+                return True
             continue
         import_targets = frozenset(imp.target_text for imp in module.imports)
         for call in module.calls:
@@ -183,5 +230,8 @@ def _sinks_present(ncm: NcmRepository, spec: SecurityRuleSpec) -> bool:
                     return True
             elif spec.rule_id == "SEC-INSECURE-CORS":
                 if callee_matches(callee, CORS_MIDDLEWARE_SINKS, import_targets):
+                    return True
+            elif spec.rule_id == "SEC-SENSITIVE-LOGGING":
+                if callee_matches(callee, LOGGING_SINKS, import_targets):
                     return True
     return False

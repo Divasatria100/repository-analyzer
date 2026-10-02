@@ -363,6 +363,32 @@ CORS_MIDDLEWARE_SINKS = SinkSpec(
     import_hints=("fastapi", "starlette"),
 )
 
+LOGGING_SINKS = SinkSpec(
+    suffixes=(
+        "logging.debug",
+        "logging.info",
+        "logging.warning",
+        "logging.warn",
+        "logging.error",
+        "logging.exception",
+        "logging.critical",
+        "logging.log",
+    ),
+    guarded_suffixes=(
+        ".debug",
+        ".info",
+        ".warning",
+        ".warn",
+        ".error",
+        ".exception",
+        ".critical",
+        ".log",
+    ),
+    bare_names=("debug", "info", "warning", "warn", "error", "exception", "critical", "log"),
+    import_hints=("logging",),
+    direct_names=("print",),
+)
+
 
 def sql_sink_match(callee: str, import_targets: frozenset[str]) -> bool:
     """SQL gate: generic ``.execute*`` plus import or receiver corroboration."""

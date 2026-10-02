@@ -39,7 +39,10 @@ MAX_SPAN_LINES = 30
 #: Maximum lines scanned backwards for local assignments.
 MAX_SCOPE_LINES = 200
 
-_STRING_RE = re.compile(r"'''(?:[^\\]|\\.)*?'''|\"\"\"(?:[^\\]|\\.)*?\"\"\"|'[^'\n]*'|\"[^\"\n]*\"")
+_STRING_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(?:[rubf]{1,3})?(?:'''(?:[^\\]|\\.)*?'''|"
+    r'"""(?:[^\\]|\\.)*?"""|\'[^\'\n]*\'|"[^\"\n]*")'
+)
 
 
 @dataclass(frozen=True)
@@ -110,24 +113,26 @@ class WorkspaceSourceProvider:
 
 
 def mask_strings(text: str) -> str:
-    """Replace string literal contents with a placeholder (shape preserved)."""
+    """Replace string literal contents with a placeholder (shape preserved).
+
+    Only genuine ``r/b/u/f`` prefixes are preserved (``f`` kept so
+    interpolation stays recognizable); a plain string whose *content*
+    starts with those letters is fully blanked, never given a phantom
+    prefix identifier.
+    """
 
     def _placeholder(match: re.Match[str]) -> str:
         token = match.group(0)
-        if len(token) >= 6 and token[:3] in ("'''", '"""'):
-            return token[:3] + token[-3:]
-        quote = token[0]
-        prefix = ""
-        body = token[1:]
-        if body[:1].lower() in ("r", "u", "b", "f"):
-            prefix = body[0]
-            body = body[1:]
-            if body[:1].lower() in ("r", "b", "u"):
-                prefix += body[0]
-                body = body[1:]
-        if prefix.lower().startswith("f") or "f" in prefix.lower():
+        prefix_match = re.match(r"(?i)^([rubf]{1,3})(['\"])", token)
+        prefix = prefix_match.group(1) if prefix_match else ""
+        if "f" in prefix.lower():
+            quote = prefix_match.group(2) if prefix_match else token[0]
             return prefix + quote + quote
-        return prefix + quote + quote
+        core = token[len(prefix) :]
+        if core[:3] in ("'''", '"""'):
+            return core[:3] + core[-3:]
+        quote = core[0] if core[:1] in ("'", '"') else '"'
+        return quote + quote
 
     return _STRING_RE.sub(_placeholder, text)
 

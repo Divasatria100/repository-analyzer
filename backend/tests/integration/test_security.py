@@ -54,15 +54,24 @@ def _file(path: str, **overrides: object) -> IndexedFile:
 
 
 def _run(tmp_path: Path, files: dict[str, bytes]) -> tuple[ParsePhaseResult, Session, Engine, Path]:
+    return _run_mixed(tmp_path, {path: (content, {}) for path, content in files.items()})
+
+
+def _run_mixed(
+    tmp_path: Path, specs: dict[str, tuple[bytes, dict[str, object]]]
+) -> tuple[ParsePhaseResult, Session, Engine, Path]:
+    """Workspace run where each file carries its own index metadata."""
     workspace = tmp_path / "ws"
     workspace.mkdir()
-    for relpath, content in files.items():
+    indexed: list[IndexedFile] = []
+    for relpath, (content, overrides) in specs.items():
         target = workspace / relpath
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
+        indexed.append(_file(relpath, **overrides))
     engine, factory = make_sqlite_factory()
     session = factory()
-    gateway.save_index(session, "a1", [_file(path) for path in files], [])
+    gateway.save_index(session, "a1", indexed, [])
     session.commit()
     workspaces = WorkspaceManager(tmp_path / "roots")
     summary = run_parse_phase(
@@ -176,6 +185,86 @@ def test_pipeline_phase8_rules_end_to_end(tmp_path: Path) -> None:
             assert finding.recommendation
             assert finding.analyzer_version
             assert finding.rule_set_version
+        assert_canary_absent()
+    finally:
+        session.close()
+        engine.dispose()
+
+
+PHASE9_APP = (
+    b"import logging\n"
+    b"from db import get_session\n"
+    b"from models import User\n"
+    b"\n"
+    b'API_BACKUP_KEY = "hunter2-hunter2-hunter2-hunter2"\n'
+    b"\n"
+    b"def login(request):\n"
+    b"    password = request.json['password']\n"
+    b"    logging.info('password=%s', password)\n"
+    b"    return password\n"
+    b"\n"
+    b'@app.delete("/users/{user_id}")\n'
+    b"def delete_account(user_id):\n"
+    b"    s = get_session()\n"
+    b"    s.query(User).filter(User.id == user_id).delete()\n"
+)
+
+PHASE9_CONFIG = b"database:\n  password: hunter2-hunter2-hunter2-hunter2\n"
+PHASE9_ENV = b'SERVICE_TOKEN="x7f3a9c2e5b1d8f4a6c0e2b5d9a3f7c1e4b2a"\n'
+
+
+def _config_file(path: str, language: str, extension: str) -> dict[str, object]:
+    return {
+        "file_type": "configuration",
+        "extension": extension,
+        "language": language,
+        "support_status": "unsupported",
+        "eligibility": "not_eligible",
+        "eligibility_reason": "non-source text; secret scanning only",
+    }
+
+
+def test_pipeline_phase9_rules_end_to_end(tmp_path: Path) -> None:
+    """Logging, authorization, and repo-wide secrets flow through the pipeline."""
+    summary, session, engine, workspace = _run(tmp_path, {"app.py": PHASE9_APP})
+    try:
+        assert summary.repository is not None
+        result = _analyze(summary.repository, workspace, ["app.py"])
+        assert result.failed is False
+        rule_ids = {finding.rule_id for finding in result.findings}
+        assert {
+            "SEC-SENSITIVE-LOGGING",
+            "SEC-POTENTIAL-AUTHORIZATION",
+            "SEC-HARDCODED-SECRET",
+        } <= rule_ids
+        assert_canary_absent()
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_pipeline_secret_scans_non_python_files(tmp_path: Path) -> None:
+    """Secret scanning reaches yaml/env files the parser leaves unparsed."""
+    summary, session, engine, workspace = _run_mixed(
+        tmp_path,
+        {
+            "app.py": (b"x = 1\n", {}),
+            "config.yaml": (PHASE9_CONFIG, _config_file("config.yaml", "yaml", "yaml")),
+            ".env": (PHASE9_ENV, _config_file(".env", "env", "env")),
+        },
+    )
+    try:
+        assert summary.repository is not None
+        result = _analyze(summary.repository, workspace, ["app.py", "config.yaml", ".env"])
+        assert result.failed is False
+        secret_paths = {
+            finding.location.file_path
+            for finding in result.findings
+            if finding.rule_id == "SEC-HARDCODED-SECRET"
+        }
+        assert secret_paths == {"config.yaml", ".env"}
+        item = next(r for r in result.rule_results if r.rule_id == "SEC-HARDCODED-SECRET")
+        assert any("only" in lim.reason for lim in item.limitations)
         assert_canary_absent()
     finally:
         session.close()

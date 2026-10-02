@@ -38,14 +38,17 @@ def test_analyzer_identity_is_stable() -> None:
 
 
 def test_rules_come_from_registry_in_deterministic_order() -> None:
-    """Nine V1.0 rules, sorted by rule ID (no hard-coded chain)."""
+    """Twelve V1.0 rules, sorted by rule ID (no hard-coded chain)."""
     rules = build_security_rules(DictSourceProvider({}))
     assert [rule.metadata.rule_id for rule in rules] == [
         "SEC-COMMAND-INJECTION",
         "SEC-DANGEROUS-DYNAMIC-EXECUTION",
         "SEC-DISABLED-TLS",
+        "SEC-HARDCODED-SECRET",
         "SEC-INSECURE-CORS",
         "SEC-PATH-TRAVERSAL",
+        "SEC-POTENTIAL-AUTHORIZATION",
+        "SEC-SENSITIVE-LOGGING",
         "SEC-SQL-INJECTION",
         "SEC-SSRF",
         "SEC-UNSAFE-DESERIALIZATION",
@@ -62,8 +65,11 @@ def test_analyzer_runs_only_security_rules() -> None:
         "SEC-COMMAND-INJECTION",
         "SEC-DANGEROUS-DYNAMIC-EXECUTION",
         "SEC-DISABLED-TLS",
+        "SEC-HARDCODED-SECRET",
         "SEC-INSECURE-CORS",
         "SEC-PATH-TRAVERSAL",
+        "SEC-POTENTIAL-AUTHORIZATION",
+        "SEC-SENSITIVE-LOGGING",
         "SEC-SQL-INJECTION",
         "SEC-SSRF",
         "SEC-UNSAFE-DESERIALIZATION",
