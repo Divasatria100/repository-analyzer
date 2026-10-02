@@ -133,14 +133,73 @@ def test_no_source_content_in_foundation_logs() -> None:
 
 def test_no_shell_or_subprocess_in_foundation() -> None:
     """The foundation package spawns nothing (worker lives in parsers)."""
+    import ast as stdlib_ast
     import pathlib
 
-    root = pathlib.Path(__file__).resolve().parents[3] / "app" / "analyzers"
-    forbidden = ("subprocess", "os.system", "os.popen", "shell=True", "Popen")
+    root = pathlib.Path(__file__).resolve().parents[2] / "app" / "analyzers"
+    assert root.is_dir(), f"analyzer root is missing: {root}"
+    paths = sorted(root.rglob("*.py"))
+    assert paths, "security boundary scan found no files"
+
+    forbidden_imports = {
+        "subprocess",
+        "socket",
+        "urllib",
+        "http.client",
+        "http",
+        "httpx",
+        "requests",
+        "importlib",
+        "runpy",
+    }
+    forbidden_bare_calls = {"eval", "exec", "compile", "__import__"}
+    forbidden_receivers = {"os", "subprocess", "socket", "requests", "httpx", "urllib"}
+    forbidden_methods = {
+        "system",
+        "popen",
+        "run",
+        "call",
+        "Popen",
+        "check_call",
+        "check_output",
+        "connect",
+        "urlopen",
+    }
     violations = []
-    for path in sorted(root.rglob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        for marker in forbidden:
-            if marker in text:
-                violations.append(f"{path.name}: {marker}")
+    for path in paths:
+        tree = stdlib_ast.parse(path.read_text(encoding="utf-8"))
+        for node in stdlib_ast.walk(tree):
+            if isinstance(node, stdlib_ast.Import):
+                for alias in node.names:
+                    if alias.name in forbidden_imports or alias.name.split(".")[0] in (
+                        "subprocess",
+                        "socket",
+                        "httpx",
+                        "requests",
+                        "importlib",
+                        "runpy",
+                    ):
+                        violations.append(f"{path.name}: import {alias.name}")
+            elif isinstance(node, stdlib_ast.ImportFrom):
+                if node.module and (
+                    node.module in forbidden_imports
+                    or node.module.split(".")[0]
+                    in ("subprocess", "socket", "httpx", "requests", "importlib", "runpy")
+                ):
+                    violations.append(f"{path.name}: from {node.module} import ...")
+            elif isinstance(node, stdlib_ast.Call):
+                func = node.func
+                if isinstance(func, stdlib_ast.Name) and func.id in forbidden_bare_calls:
+                    violations.append(f"{path.name}: call {func.id}()")
+                elif (
+                    isinstance(func, stdlib_ast.Attribute)
+                    and isinstance(func.value, stdlib_ast.Name)
+                    and func.value.id in forbidden_receivers
+                    and func.attr in forbidden_methods
+                ):
+                    violations.append(f"{path.name}: call {func.value.id}.{func.attr}()")
+                for keyword in node.keywords:
+                    if keyword.arg == "shell" and isinstance(keyword.value, stdlib_ast.Constant):
+                        if keyword.value.value is True:
+                            violations.append(f"{path.name}: shell=True")
     assert violations == []
