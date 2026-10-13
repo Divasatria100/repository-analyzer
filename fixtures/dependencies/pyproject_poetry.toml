@@ -1,0 +1,10 @@
+[tool.poetry]
+name = "repolens-dep-fixture"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+requests = "^2.31.0"
+flask = {version = "==3.0.0", extras = ["async"]}
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"

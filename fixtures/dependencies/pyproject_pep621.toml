@@ -1,0 +1,6 @@
+[project]
+name = "repolens-dep-fixture"
+dependencies = ["requests>=2.30", "flask==3.0.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
