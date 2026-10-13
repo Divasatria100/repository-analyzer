@@ -162,6 +162,35 @@ def _base_limitations(
     return limitations
 
 
+#: Presentation-only caps for inline neighbor listings in finding
+#: descriptions. Metrics stay exact; only the displayed subset is bounded.
+#: Both caps are deterministic (inputs are pre-sorted) and every truncation
+#: carries an explicit "first N of M" statement plus a limitation-free,
+#: self-describing sentence (the metric value itself remains exact).
+MAX_LISTED_NEIGHBORS = 20
+MAX_LISTED_SITES = 5
+
+
+def _format_site_list(sites: list[str]) -> str:
+    """Bounded `path:line` site list with an explicit remainder statement."""
+    shown = sites[:MAX_LISTED_SITES]
+    text = ", ".join(shown)
+    if len(sites) > len(shown):
+        text += f" (+{len(sites) - len(shown)} more)"
+    return text
+
+
+def _format_neighbor_block(items: list[str], noun: str) -> str:
+    """Bounded bullet block stating displayed and true totals when cut."""
+    if not items:
+        return "none"
+    shown = items[:MAX_LISTED_NEIGHBORS]
+    text = "\n".join(f"- {item}" for item in shown)
+    if len(items) > len(shown):
+        text += f"\nShowing the first {len(shown)} of {len(items)} {noun}."
+    return text
+
+
 def _incomplete_note(prepared: PreparedAnalysis, path: str) -> Limitation | None:
     if path in prepared.partial_paths:
         return Limitation(
@@ -226,6 +255,10 @@ def execute_circular_dependency(
             )
             if crosses:
                 description += "\nThe cycle crosses package boundaries."
+            description += (
+                "\nThe displayed path is representative; this finding does not "
+                "enumerate every cycle within the component."
+            )
             description += (
                 "\nA circular dependency may indicate structural coupling or "
                 "architectural complexity requiring review. It is a structural "
@@ -362,7 +395,7 @@ def execute_high_fan_out(
         lines = []
         for target in neighbors:
             edge = prepared.report.graph.edges[(path, target)]
-            sites = ", ".join(f"{path_}:{line}" for path_, line, _c in edge.locations)
+            sites = _format_site_list([f"{path_}:{line}" for path_, line, _c in edge.locations])
             lines.append(f"- {target} ({sites})")
         incomplete = path in prepared.partial_paths or path in prepared.unresolved_paths
         findings.append(
@@ -376,7 +409,8 @@ def execute_high_fan_out(
                 title=f"Potentially high fan-out: {path}",
                 description=(
                     f"Module {path} depends on {metric.value} distinct internal "
-                    f"modules. Outgoing relationships:\n" + "\n".join(lines)
+                    "modules. Outgoing relationships:\n"
+                    + _format_neighbor_block(lines, "outgoing neighbors")
                 ),
                 value=metric.value,
                 threshold=threshold,
@@ -406,7 +440,7 @@ def execute_high_fan_in(
         lines = []
         for source in neighbors:
             edge = prepared.report.graph.edges[(source, path)]
-            sites = ", ".join(f"{path_}:{line}" for path_, line, _c in edge.locations)
+            sites = _format_site_list([f"{path_}:{line}" for path_, line, _c in edge.locations])
             lines.append(f"- {source} ({sites})")
         incomplete = path in prepared.partial_paths or path in prepared.unresolved_paths
         findings.append(
@@ -420,7 +454,8 @@ def execute_high_fan_in(
                 title=f"Potentially high fan-in: {path}",
                 description=(
                     f"Module {path} is depended on by {metric.value} distinct internal "
-                    f"modules. Incoming relationships:\n" + "\n".join(lines)
+                    "modules. Incoming relationships:\n"
+                    + _format_neighbor_block(lines, "incoming neighbors")
                 ),
                 value=metric.value,
                 threshold=threshold,
@@ -449,6 +484,8 @@ def execute_high_coupling(
         incoming = prepared.report.graph.predecessors(path)
         outgoing = prepared.report.graph.successors(path)
         incomplete = path in prepared.partial_paths or path in prepared.unresolved_paths
+        incoming_block = _format_neighbor_block(list(incoming), "incoming neighbors")
+        outgoing_block = _format_neighbor_block(list(outgoing), "outgoing neighbors")
         findings.append(
             _threshold_rule_outcome(
                 execution_context=execution_context,
@@ -461,8 +498,8 @@ def execute_high_coupling(
                 description=(
                     f"Module {path} has coupling-def-1 {metric.value} "
                     f"(|In union Out| over internal edges). Incoming "
-                    f"({len(incoming)}): {', '.join(incoming) or 'none'}. "
-                    f"Outgoing ({len(outgoing)}): {', '.join(outgoing) or 'none'}."
+                    f"({len(incoming)}):\n{incoming_block}\n"
+                    f"Outgoing ({len(outgoing)}):\n{outgoing_block}"
                 ),
                 value=metric.value,
                 threshold=threshold,
@@ -784,7 +821,11 @@ def execute_layer_violation(
             or assignments[violation.target].from_filename
         )
         confidence = Confidence.LOW if from_filename else Confidence.MEDIUM
-        severity = Severity.MEDIUM if consistent >= 5 else Severity.LOW
+        # Naming-inferred layers never escalate severity: the contract
+        # authorizes considering directional consistency (docs/08 §6.8) but
+        # defines no numeric mapping, so violations stay Low with the
+        # consistency count recorded as a severity factor instead.
+        severity = Severity.LOW
         line = edge.locations[0][1] if edge is not None and edge.locations else 1
         evidence = _module_evidence(violation.source, line, prepared.source_texts)
         rule_limitations: list[Limitation] = []

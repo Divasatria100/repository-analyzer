@@ -148,6 +148,7 @@ def build_graph(
         if graph.truncated and edge_count >= max_edges:
             break
 
+    graph.freeze_index()
     unresolved.sort(key=lambda item: (item.path, item.line, item.column, item.target_text))
     if unresolved:
         limitation_reasons.append(

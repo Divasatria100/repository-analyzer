@@ -56,25 +56,63 @@ class UnresolvedImport:
 class ArchGraph:
     """Directed architecture graph: modules plus internal edges.
 
-    Adjacency is derived on demand from the sorted edge set; iteration order
-    is always path-sorted so results never depend on insertion order.
-    Self-loops are preserved as edges but excluded from neighbor sets used
-    by fan/coupling metrics (documented in metrics.py).
+    Adjacency is served from a frozen index once :meth:`freeze_index` runs
+    (called at the end of graph construction), giving O(1) neighbor lookups
+    without per-node full-edge scans. Before freezing, neighbor sets are
+    derived on demand exactly as before, so directly constructed graphs keep
+    working. Iteration order is always path-sorted so results never depend
+    on insertion order. Self-loops are preserved as edges but excluded from
+    neighbor sets used by fan/coupling metrics (documented in metrics.py).
     """
 
     nodes: dict[str, ArchModule] = field(default_factory=dict)
     edges: dict[tuple[str, str], ArchEdge] = field(default_factory=dict)
     truncated: bool = False
     truncation_reason: str = ""
+    _successor_index: dict[str, tuple[str, ...]] | None = field(
+        default=None, repr=False, compare=False
+    )
+    _predecessor_index: dict[str, tuple[str, ...]] | None = field(
+        default=None, repr=False, compare=False
+    )
+
+    def freeze_index(self) -> None:
+        """Build the shared adjacency index in one O(V + E) pass.
+
+        Idempotent: rebuilding an already-frozen graph yields the same index.
+        Must be called after the edge collection is final; later edge
+        mutations are not reflected (construction freezes before analysis).
+        """
+        successors: dict[str, set[str]] = {}
+        predecessors: dict[str, set[str]] = {}
+        for source, target in self.edges:
+            if source != target:
+                successors.setdefault(source, set()).add(target)
+                predecessors.setdefault(target, set()).add(source)
+        self._successor_index = {
+            node: tuple(sorted(neighbors)) for node, neighbors in successors.items()
+        }
+        self._predecessor_index = {
+            node: tuple(sorted(neighbors)) for node, neighbors in predecessors.items()
+        }
+
+    @property
+    def index_frozen(self) -> bool:
+        """True when neighbor lookups are served from the shared index."""
+        return self._successor_index is not None and self._predecessor_index is not None
 
     def successors(self, node: str) -> tuple[str, ...]:
         """Distinct internal modules ``node`` depends on (self excluded)."""
+        if self._successor_index is not None:
+            return self._successor_index.get(node, ())
         return tuple(
             sorted({target for (source, target) in self.edges if source == node and target != node})
         )
 
     def predecessors(self, node: str) -> tuple[str, ...]:
         """Distinct internal modules depending on ``node`` (self excluded)."""
+        if self._predecessor_index is not None:
+            return self._predecessor_index.get(node, ())
         return tuple(
             sorted({source for (source, target) in self.edges if target == node and source != node})
         )

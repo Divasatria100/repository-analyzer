@@ -122,3 +122,128 @@ def test_budgets_mirror_operational_settings() -> None:
 
     assert GRAPH_MAX_NODES == OperationalSettings().graph_max_nodes == 10000
     assert GRAPH_MAX_EDGES == OperationalSettings().graph_max_edges == 50000
+
+
+class _CountingEdges(dict):
+    """Edge collection counting full iterations (structural cost probe)."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.iterations = 0
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        self.iterations += 1
+        return super().__iter__()
+
+
+def test_frozen_index_serves_neighbors_without_edge_scans() -> None:
+    """FND-03: metric sweeps over all nodes trigger zero full edge scans."""
+    from app.analyzers.architecture.metrics import coupling_def_1, fan_in, fan_out
+
+    report = graph_for({"hub.py": "import a\nimport b\n", "a.py": "X = 1\n", "b.py": "X = 1\n"})
+    assert report.graph.index_frozen is True
+    expected = {
+        path: (
+            fan_out(report.graph, path).value,
+            fan_in(report.graph, path).value,
+            coupling_def_1(report.graph, path).value,
+        )
+        for path in sorted(report.graph.nodes)
+    }
+    report.graph.edges = _CountingEdges(report.graph.edges)
+    counting = report.graph.edges
+    assert isinstance(counting, _CountingEdges)
+    for path in sorted(report.graph.nodes):
+        assert (
+            fan_out(report.graph, path).value,
+            fan_in(report.graph, path).value,
+            coupling_def_1(report.graph, path).value,
+        ) == expected[path]
+        assert report.graph.successors(path) == report.graph.successors(path)
+        assert report.graph.predecessors(path) == report.graph.predecessors(path)
+    assert counting.iterations == 0
+
+
+def test_cycles_use_shared_index_without_rescanning() -> None:
+    """FND-03: Tarjan and path walks reuse the index (no per-node scans)."""
+    from app.analyzers.architecture.cycles import find_cycles
+
+    report = graph_for({"a.py": "import b\n", "b.py": "import a\n"})
+    report.graph.edges = _CountingEdges(report.graph.edges)
+    counting = report.graph.edges
+    assert isinstance(counting, _CountingEdges)
+    groups = find_cycles(report.graph)
+    assert len(groups) == 1
+    assert counting.iterations == 0
+
+
+def test_unfrozen_graph_falls_back_with_identical_results() -> None:
+    """FND-03: directly constructed graphs keep working without an index."""
+    from app.analyzers.architecture.metrics import coupling_def_1, fan_in, fan_out
+    from app.analyzers.architecture.models import ArchEdge, ArchGraph, ArchModule
+
+    edges = {
+        ("a.py", "b.py"): ArchEdge(source="a.py", target="b.py", locations=(("a.py", 1, 0),)),
+        ("b.py", "a.py"): ArchEdge(source="b.py", target="a.py", locations=(("b.py", 1, 0),)),
+    }
+    nodes = {path: ArchModule(id=path, path=path) for path in ("a.py", "b.py")}
+    graph = ArchGraph(nodes=nodes, edges=dict(edges))
+    assert graph.index_frozen is False
+    assert fan_out(graph, "a.py").value == 1
+    assert fan_in(graph, "a.py").value == 1
+    assert coupling_def_1(graph, "a.py").value == 1
+    graph.freeze_index()
+    assert graph.index_frozen is True
+    assert fan_out(graph, "a.py").value == 1
+    assert fan_in(graph, "a.py").value == 1
+    assert coupling_def_1(graph, "a.py").value == 1
+
+
+def test_index_identical_under_reordered_construction() -> None:
+    """FND-03: the frozen index does not depend on insertion order."""
+    files = {"c.py": "import a\n", "b.py": "import a\nimport c\n", "a.py": "X = 1\n"}
+    first = graph_for(files)
+    second = graph_for(dict(reversed(list(files.items()))))
+    assert first.graph._successor_index == second.graph._successor_index
+    assert first.graph._predecessor_index == second.graph._predecessor_index
+
+
+def test_large_sparse_graph_single_pass_index() -> None:
+    """FND-03: a 2000-node chain builds one index; sweeps scan nothing."""
+    from app.analyzers.architecture.metrics import coupling_def_1, fan_in, fan_out
+    from app.analyzers.architecture.models import ArchEdge, ArchGraph, ArchModule
+
+    size = 2000
+    nodes = {f"m{i}.py": ArchModule(id=f"m{i}.py", path=f"m{i}.py") for i in range(size)}
+    edges = {
+        (f"m{i}.py", f"m{i + 1}.py"): ArchEdge(
+            source=f"m{i}.py", target=f"m{i + 1}.py", locations=((f"m{i}.py", 1, 0),)
+        )
+        for i in range(size - 1)
+    }
+    graph = ArchGraph(nodes=nodes, edges=_CountingEdges(edges))
+    counting = graph.edges
+    assert isinstance(counting, _CountingEdges)
+    built = counting.iterations
+    graph.freeze_index()
+    # One bounded pass over edges for the index itself.
+    assert counting.iterations - built <= 2
+    for i in (0, size // 2, size - 1):
+        assert fan_out(graph, f"m{i}.py").value == (0 if i == size - 1 else 1)
+        assert fan_in(graph, f"m{i}.py").value == (0 if i == 0 else 1)
+        assert coupling_def_1(graph, f"m{i}.py").value == (1 if i in (0, size - 1) else 2)
+    after = counting.iterations
+    for i in range(size):
+        fan_out(graph, f"m{i}.py")
+        fan_in(graph, f"m{i}.py")
+        coupling_def_1(graph, f"m{i}.py")
+    assert counting.iterations == after
+
+
+def test_truncated_graph_keeps_frozen_index_and_flag() -> None:
+    """FND-03: truncation still freezes a consistent, flagged index."""
+    files = {f"m{i}.py": "X = 1\n" for i in range(5)}
+    report = build_graph(parse_files(files), max_nodes=3)
+    assert report.graph.index_frozen is True
+    assert report.graph.truncated is True
+    assert report.graph.successors("m0.py") == ()
