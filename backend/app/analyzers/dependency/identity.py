@@ -47,6 +47,15 @@ def identity_key(ecosystem: str, name: str) -> str:
     return f"{ecosystem}:{normalize_npm_name(name)}"
 
 
+_NPM_SHORTHAND_VCS_PREFIXES = ("github:", "gist:", "bitbucket:", "gitlab:")
+
+#: Characters permitted inside one exact version token (PEP 440 versions,
+#: epochs with ``!``, pre/post/dev releases, semver build metadata). Anything
+#: else (spaces, commas, operators, slashes, backslashes, ``*``) means the
+#: value is not an exact version.
+_EXACT_VERSION_RE = re.compile(r"[A-Za-z0-9._\-+!]+")
+
+
 def classify_specifier_kind(value: str | None) -> str:
     """Classify a declared dependency reference (registry/url/vcs/path/...)."""
     if value is None or not value.strip():
@@ -55,13 +64,46 @@ def classify_specifier_kind(value: str | None) -> str:
     lowered = text.lower()
     if text.startswith(("http://", "https://", "ftp://", "file://")):
         return "url"
+    if text.startswith("@"):
+        # PEP 508 direct reference (``pkg @ https://...``): a URL, not registry.
+        return "url"
+    if lowered.startswith("npm:"):
+        # npm alias (``npm:other@1.0.0``): a registry reference with an
+        # embedded name; the version is never extracted as exact here.
+        return "registry"
     if text.startswith(_KNOWN_VCS_PREFIXES) or lowered.startswith("git://"):
         return "vcs"
-    if lowered.startswith(("file:", "path:", "./", "../", "/", "~/")):
-        return "path"
+    if lowered.startswith(_NPM_SHORTHAND_VCS_PREFIXES):
+        # npm ``github:user/repo``-style shorthands address git repositories.
+        return "vcs"
     if "-e " in f" {lowered} " or lowered.startswith(("-e ", "--editable")):
         return "editable"
+    if lowered.startswith(("file:", "path:", "link:", "portal:", "./", "../", "/", "~/")):
+        return "path"
+    if "/" in text and not text.startswith("@"):
+        # Registry names never contain ``/`` outside ``@scope/`` prefixes:
+        # ``user/repo`` is the npm GitHub shorthand (a git source).
+        return "vcs"
     return "registry"
+
+
+def is_plausible_exact_version(value: str | None) -> bool:
+    """True only for strings shaped like one exact version (never a range).
+
+    Rejects wildcards (``*``), dist-tags without digits (``latest``),
+    operators, whitespace, commas, URLs, paths, and stray characters such as
+    a requirements line-continuation backslash. A plausible shape is still
+    not proof of resolvability — lockfile provenance decides that — but an
+    implausible shape must never be stored or queried as a resolved version.
+    """
+    if value is None:
+        return False
+    text = value.strip()
+    if not text or not text[0].isalnum():
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9._\-+!]+", text):
+        return False
+    return any(char.isdigit() for char in text)
 
 
 def is_exact_pinned(constraint: str | None) -> bool:

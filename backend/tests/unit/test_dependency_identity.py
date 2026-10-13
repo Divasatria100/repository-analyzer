@@ -27,6 +27,28 @@ def test_npm_scoped_package_preserved() -> None:
     assert normalize_npm_name("React") == "React"
 
 
+def test_npm_canonical_passes_through_to_osv_query() -> None:
+    """C9: npm identity preserves scope/case end to end."""
+    import json
+
+    import httpx
+
+    from tests.fixtures.helpers.dependency_helpers import analyze_manifests, mock_osv_client
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"results": [{}]})
+
+    analyze_manifests(
+        {"package.json": '{"dependencies": {"@scope/pkg": "1.2.3"}}'},
+        osv_client=mock_osv_client(handler),  # type: ignore[arg-type]
+    )
+    body = json.loads(seen[0].content.decode("utf-8"))
+    assert body["queries"][0]["package"] == {"name": "@scope/pkg", "ecosystem": "npm"}
+
+
 def test_ecosystem_rules_never_cross_applied() -> None:
     assert canonical_name("pypi", "My_Package") == "my-package"
     assert canonical_name("npm", "My_Package") == "My_Package"

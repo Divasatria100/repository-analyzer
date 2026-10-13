@@ -352,3 +352,123 @@ def test_retry_after_is_honored_without_live_network(monkeypatch: pytest.MonkeyP
     outcome = client.query_batch([OsvQuery("pypi", "requests", "2.31.0")])
     assert outcome.transport_failed is False
     assert sleeps and sleeps[0] == 1
+
+
+def test_only_valid_exact_versions_are_queried() -> None:
+    """FAIL-2: wildcards/constraints never leave as exact versions."""
+    seen: list[httpx.Request] = []
+    client = mock_osv_client(_batch_handler({}, requests=seen))  # type: ignore[arg-type]
+    result, _, _ = analyze_manifests(
+        {
+            "Pipfile.lock": (
+                '{"default": {"good": {"version": "==1.2.3"}, '
+                '"wild": {"version": "*"}, "blank": {"version": ""}, '
+                '"ranged": {"version": ">=1.0"}}, "develop": {}}'
+            ),
+            "requirements.txt": "pinned==4.5.6\nranged>=1.0\n",
+        },
+        osv_client=client,
+    )
+    assert seen
+    body = json.loads(seen[0].content.decode("utf-8"))
+    queried = sorted((item["package"]["name"], item["version"]) for item in body["queries"])
+    assert queried == [("good", "1.2.3"), ("pinned", "4.5.6")]
+    outcome = rule_result(result, "DEP-KNOWN-VULNERABILITY")
+    assert any("wild" in item.reason or "no exact" in item.reason for item in outcome.limitations)
+
+
+def test_dotted_poetry_name_queries_canonical_identity() -> None:
+    """FAIL-3: the OSV request uses the full canonical name, never a fragment."""
+    seen: list[httpx.Request] = []
+    client = mock_osv_client(_batch_handler({}, requests=seen))  # type: ignore[arg-type]
+    analyze_manifests(
+        {
+            "pyproject.toml": (
+                '[tool.poetry]\nname="d"\n[tool.poetry.dependencies]\n'
+                'python = "^3.13"\n"zope.interface" = "==5.0"\n'
+            )
+        },
+        osv_client=client,
+    )
+    assert seen
+    body = json.loads(seen[0].content.decode("utf-8"))
+    names = [item["package"]["name"] for item in body["queries"]]
+    assert names == ["zope-interface"]
+    assert "interface" not in names
+
+
+def test_batch_pagination_is_followed() -> None:
+    """C4: `next_page_token` results are fetched with page_token follow-ups."""
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.path != "/v1/querybatch":
+            return httpx.Response(200, json=dict(VULN_FULL, id=request.url.path.rsplit("/", 1)[-1]))
+        body = json.loads(request.content.decode("utf-8"))
+        if any("page_token" in item for item in body["queries"]):
+            return httpx.Response(200, json={"results": [{"vulns": [{"id": "GHSA-page2"}]}]})
+        return httpx.Response(
+            200, json={"results": [{"vulns": [{"id": "GHSA-page1"}], "next_page_token": "tok"}]}
+        )
+
+    client = mock_osv_client(handler)
+    outcome = client.query_batch([OsvQuery("pypi", "requests", "2.31.0")])
+    assert outcome.transport_failed is False
+    assert 0 not in outcome.failed_indexes
+    assert [item.advisory_id for item in outcome.advisories[0]] == ["GHSA-page1", "GHSA-page2"]
+    followups = [
+        request
+        for request in calls
+        if request.url.path == "/v1/querybatch"
+        and "page_token" in json.loads(request.content.decode("utf-8"))["queries"][0]
+    ]
+    assert len(followups) == 1
+
+
+def test_pagination_token_loop_is_bounded() -> None:
+    """C4: a repeating token stops the walk without losing collected entries."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/v1/querybatch":
+            return httpx.Response(200, json=dict(VULN_FULL, id="GHSA-loop"))
+        return httpx.Response(
+            200, json={"results": [{"vulns": [{"id": "GHSA-loop"}], "next_page_token": "same"}]}
+        )
+
+    client = mock_osv_client(handler)
+    outcome = client.query_batch([OsvQuery("pypi", "requests", "2.31.0")])
+    assert [item.advisory_id for item in outcome.advisories[0]] == ["GHSA-loop"]
+    assert 0 in outcome.failed_indexes  # incomplete walk is explicit, not clean
+
+
+def test_hydration_caps_preserve_obtained_advisories() -> None:
+    """C5: per-position hydration is bounded; obtained advisories survive."""
+    from app.services import osv_gateway as gateway_module
+
+    ids = [f"GHSA-{index:04d}" for index in range(gateway_module.MAX_HYDRATIONS_PER_POSITION + 5)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/querybatch":
+            return httpx.Response(200, json={"results": [{"vulns": [{"id": vid} for vid in ids]}]})
+        advisory_id = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json=dict(VULN_FULL, id=advisory_id))
+
+    client = mock_osv_client(handler)
+    outcome = client.query_batch([OsvQuery("pypi", "requests", "2.31.0")])
+    assert len(outcome.advisories[0]) == gateway_module.MAX_HYDRATIONS_PER_POSITION
+    assert 0 in outcome.failed_indexes  # truncation is explicit
+
+
+def test_entries_without_ids_are_not_clean() -> None:
+    """C6: a page of unusable entries never reads as 'no advisories'."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/querybatch":
+            return httpx.Response(200, json={"results": [{"vulns": [{"noid": 1}, "oops"]}]})
+        return httpx.Response(200, json=dict(VULN_FULL, id="GHSA-x"))
+
+    client = mock_osv_client(handler)
+    outcome = client.query_batch([OsvQuery("pypi", "requests", "2.31.0")])
+    assert outcome.advisories[0] == []
+    assert 0 in outcome.failed_indexes

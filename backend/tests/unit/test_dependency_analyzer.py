@@ -156,3 +156,55 @@ def test_findings_carry_versions_and_recommendations() -> None:
     assert finding.rule_set_version == "1.0"
     assert finding.recommendation
     assert finding.location.file_path in ("requirements.txt", "services/api/requirements.txt")
+
+
+def test_introduced_by_is_version_aware() -> None:
+    """C8: parents attribute to the occurrence version the edge records."""
+    from app.analyzers.dependency.analyzer import (
+        DictManifestProvider,
+        build_inventory,
+        introduced_by_chains,
+    )
+    from app.analyzers.dependency.detection import find_duplicate_versions
+
+    text = """\
+{
+  "lockfileVersion": 3,
+  "packages": {
+    "": {"name": "demo"},
+    "node_modules/a": {"version": "1.0.0", "dependencies": {"b": "^2.0.0"}},
+    "node_modules/b": {"version": "2.0.0"},
+    "node_modules/c": {"version": "1.0.0", "dependencies": {"b": "^2.1.0"}},
+    "node_modules/c/node_modules/b": {"version": "2.1.0"}
+  }
+}
+"""
+    inventory = build_inventory(DictManifestProvider({"package-lock.json": text}))
+    groups, _ = find_duplicate_versions(inventory.occurrences)
+    assert len(groups) == 1
+    chains = introduced_by_chains(groups[0], inventory.outcomes)
+    assert chains["2.0.0"] == ["a (package-lock.json)"]
+    assert chains["2.1.0"] == ["c (package-lock.json)"]
+
+
+def test_introduced_by_without_versions_attributes_tree() -> None:
+    """C8: range-only edges (Poetry) attribute to the recorded tree."""
+    from app.analyzers.dependency.analyzer import (
+        DictManifestProvider,
+        build_inventory,
+        introduced_by_chains,
+    )
+    from app.analyzers.dependency.detection import find_duplicate_versions
+
+    lock = (
+        '[[package]]\nname = "a"\nversion = "1.0.0"\n'
+        '[package.dependencies]\nb = ">=2.0"\n'
+        '[[package]]\nname = "b"\nversion = "2.0.0"\n'
+        '[[package]]\nname = "b"\nversion = "2.1.0"\n'
+    )
+    inventory = build_inventory(DictManifestProvider({"poetry.lock": lock}))
+    groups, _ = find_duplicate_versions(inventory.occurrences)
+    assert len(groups) == 1
+    chains = introduced_by_chains(groups[0], inventory.outcomes)
+    assert chains["2.0.0"] == ["a (poetry.lock)"]
+    assert chains["2.1.0"] == ["a (poetry.lock)"]

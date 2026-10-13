@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import tomllib
 from pathlib import Path
@@ -18,17 +19,19 @@ from pathlib import Path
 from app.analyzers.dependency.identity import (
     canonical_name,
     classify_specifier_kind,
+    is_plausible_exact_version,
     split_requirement_name,
     strip_extras,
 )
 from app.analyzers.dependency.models import (
     DependencyClass,
     DependencyOccurrence,
+    LockRelation,
     ManifestOutcome,
     ManifestRef,
     SupportState,
 )
-from app.core.logging import get_logger, redact_text
+from app.core.logging import get_logger
 
 _logger = get_logger("analyzers.dependency.parsers")
 
@@ -64,12 +67,31 @@ def read_manifest_text(
         return None
 
 
-def find_line_for(text: str, needle: str) -> int | None:
-    """Best-effort 1-based line number for a dependency name (None when unsure)."""
-    lowered = needle.lower()
+def find_line_for(text: str, needle: str, occurrence: int = 0) -> int | None:
+    """Best-effort 1-based line number for a dependency name.
+
+    The needle must appear as a delimited token (never as a substring of a
+    longer name such as ``flask-cors`` when looking for ``flask``), and
+    full-line comments are never matched. ``occurrence`` selects the n-th
+    match (0-based) so repeated declarations in one file resolve to distinct
+    lines. Returns ``None`` when no unambiguous match exists — callers must
+    record unavailable evidence instead of fabricating a line number.
+    """
+    if not needle:
+        return None
+    pattern = re.compile(
+        r"(?<![A-Za-z0-9_.\-@/+])" + re.escape(needle) + r"(?![A-Za-z0-9_.\-@/+])",
+        re.IGNORECASE,
+    )
+    matches: list[int] = []
     for number, line in enumerate(text.splitlines(), start=1):
-        if lowered in line.lower():
-            return number
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if pattern.search(line):
+            matches.append(number)
+    if occurrence < len(matches):
+        return matches[occurrence]
     return None
 
 
@@ -113,6 +135,12 @@ def parse_requirements_txt(text: str, ref: ManifestRef) -> ManifestOutcome:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        if line.endswith("\\"):
+            # Line continuation (hash-checking mode): the backslash joins the
+            # next line and is never part of the version itself.
+            line = line[:-1].rstrip()
+            if not line:
+                continue
         if line.startswith(("-", "--")):
             outcome.reasons.append(
                 f"line {number}: pip option/include line is not statically "
@@ -128,11 +156,7 @@ def parse_requirements_txt(text: str, ref: ManifestRef) -> ManifestOutcome:
             outcome.reasons.append(f"line {number}: entry could not be parsed statically")
             continue
         kind = classify_specifier_kind(constraint)
-        resolved: str | None = None
-        if constraint is not None and constraint.strip().startswith("==") and kind == "registry":
-            pinned = constraint.strip()[2:].strip().split(",")[0].strip()
-            pinned = pinned.split()[0] if pinned else ""
-            resolved = pinned or None
+        resolved = _pinned_requirement_version(constraint, kind)
         outcome.occurrences.append(
             _occurrence(
                 ref=ref,
@@ -147,6 +171,28 @@ def parse_requirements_txt(text: str, ref: ManifestRef) -> ManifestOutcome:
             )
         )
     return outcome
+
+
+def _pinned_requirement_version(constraint: str | None, kind: str) -> str | None:
+    """Exact version from a requirements pin, or ``None`` when not exact.
+
+    Only ``==`` (normalized equality) and ``===`` (arbitrary string equality,
+    PEP 440: the installed version string is exactly the pinned string)
+    without companions yield a resolved version, and only when the remainder
+    is shaped like a version. Ranges, wildcards, hashes, and malformed
+    remainders stay unresolved — never guessed, never sent to OSV.
+    """
+    if constraint is None or kind != "registry":
+        return None
+    text = constraint.strip()
+    for prefix in ("===", "=="):
+        if text.startswith(prefix) and "," not in text:
+            remainder = text[len(prefix) :].strip().split(",")[0].strip()
+            remainder = remainder.split()[0] if remainder else ""
+            if remainder and is_plausible_exact_version(remainder):
+                return remainder
+            return None
+    return None
 
 
 # --- pyproject.toml ---------------------------------------------------------
@@ -174,6 +220,7 @@ def parse_pyproject_toml(text: str, ref: ManifestRef) -> ManifestOutcome:
         outcome.reasons.append("unexpected TOML shape; recorded as failed, not clean")
         return outcome
     project = document.get("project")
+    line_counts: dict[str, int] = {}
     if isinstance(project, dict):
         for entry in _as_str_list(project.get("dependencies")):
             name, constraint = split_requirement_name(entry)
@@ -189,7 +236,7 @@ def parse_pyproject_toml(text: str, ref: ManifestRef) -> ManifestOutcome:
                     section="project.dependencies",
                     dependency_class=DependencyClass.DIRECT,
                     runtime_context="runtime",
-                    line=find_line_for(text, name),
+                    line=_next_line(text, name, line_counts),
                     kind=classify_specifier_kind(constraint),
                 )
             )
@@ -209,19 +256,23 @@ def parse_pyproject_toml(text: str, ref: ManifestRef) -> ManifestOutcome:
                             section=f"project.optional-dependencies.{group}",
                             dependency_class=DependencyClass.DIRECT,
                             runtime_context="optional",
-                            line=find_line_for(text, name),
+                            line=_next_line(text, name, line_counts),
                             kind=classify_specifier_kind(constraint),
                         )
                     )
     poetry = document.get("tool")
-    poetry_deps: dict[str, object] = {}
+    # (dependency name, spec, group-or-None): the group is tracked from the
+    # section the entry was read from — never inferred from dots in the name,
+    # so valid dotted names such as ``zope.interface`` keep their identity.
+    poetry_deps: list[tuple[str, object, str | None]] = []
     poetry_partial_notes: list[str] = []
     if isinstance(poetry, dict) and isinstance(poetry.get("poetry"), dict):
         poetry_section = poetry["poetry"]
         assert isinstance(poetry_section, dict)
         raw_deps = poetry_section.get("dependencies")
         if isinstance(raw_deps, dict):
-            poetry_deps.update(raw_deps)
+            for dep_name, dep_spec in raw_deps.items():
+                poetry_deps.append((dep_name, dep_spec, None))
         for group_key in ("group",):
             groups = poetry_section.get(group_key)
             if isinstance(groups, dict):
@@ -232,25 +283,36 @@ def parse_pyproject_toml(text: str, ref: ManifestRef) -> ManifestOutcome:
                         deps = group_body["dependencies"]
                         assert isinstance(deps, dict)
                         for dep_name, dep_spec in deps.items():
-                            poetry_deps[f"{group_name}.{dep_name}"] = dep_spec
+                            poetry_deps.append((dep_name, dep_spec, group_name))
         dev_deps = poetry_section.get("dev-dependencies")
         if isinstance(dev_deps, dict):
             for dep_name, dep_spec in dev_deps.items():
-                poetry_deps[f"dev.{dep_name}"] = dep_spec
+                poetry_deps.append((dep_name, dep_spec, "dev"))
         if "scripts" in poetry_section or "plugins" in poetry_section:
             poetry_partial_notes.append(
                 "poetry scripts/plugins sections are not dependency declarations; not evaluated"
             )
-    for qualified, spec in poetry_deps.items():
-        if "." in qualified and not qualified.startswith("python"):
-            group, _, dep_name = qualified.partition(".")
-            section = f"tool.poetry.group.{group}.dependencies"
-            runtime = "development" if group == "dev" else "runtime"
-        else:
-            dep_name, section, runtime = qualified, "tool.poetry.dependencies", "runtime"
+    poetry_line_counts: dict[str, int] = {}
+    for dep_name, spec, group in poetry_deps:
         if dep_name.lower() == "python":
             continue
+        if isinstance(spec, dict) and not any(key in spec for key in ("version", "git", "path")):
+            # Not a Poetry dependency table (e.g. a TOML nested table from an
+            # unquoted dotted key): never invent an occurrence from its key.
+            outcome.reasons.append(
+                f"tool.poetry entry {dep_name!r} is not a recognized dependency "
+                "declaration; recorded as uninterpretable"
+            )
+            continue
+        if group is None:
+            section = "tool.poetry.dependencies"
+            runtime = "runtime"
+        else:
+            section = f"tool.poetry.group.{group}.dependencies"
+            runtime = "development" if group == "dev" else group
         constraint, resolved, kind = _poetry_spec(spec)
+        line = find_line_for(text, dep_name, poetry_line_counts.get(dep_name, 0))
+        poetry_line_counts[dep_name] = poetry_line_counts.get(dep_name, 0) + 1
         outcome.occurrences.append(
             _occurrence(
                 ref=ref,
@@ -260,7 +322,7 @@ def parse_pyproject_toml(text: str, ref: ManifestRef) -> ManifestOutcome:
                 section=section,
                 dependency_class=DependencyClass.DIRECT,
                 runtime_context=runtime,
-                line=find_line_for(text, dep_name),
+                line=line,
                 kind=kind,
             )
         )
@@ -285,6 +347,13 @@ def _with_state(ref: ManifestRef, state: SupportState) -> ManifestRef:
     )
 
 
+def _next_line(text: str, name: str, counts: dict[str, int]) -> int | None:
+    """n-th match line for repeated declarations of one name in a file."""
+    line = find_line_for(text, name, counts.get(name, 0))
+    counts[name] = counts.get(name, 0) + 1
+    return line
+
+
 def _as_str_list(value: object) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [item for item in value if isinstance(item, str)]
@@ -295,9 +364,12 @@ def _pinned_from_constraint(constraint: str | None) -> str | None:
     if constraint is None:
         return None
     text = constraint.strip()
+    if text.startswith("==="):
+        remainder = text[3:].strip().split(";")[0].strip()
+        return remainder if remainder and is_plausible_exact_version(remainder) else None
     if text.startswith("==") and "," not in text and " " not in text.strip("="):
         pinned = text[2:].strip().split(";")[0].strip()
-        return pinned or None
+        return pinned if pinned and is_plausible_exact_version(pinned) else None
     return None
 
 
@@ -363,7 +435,8 @@ def parse_poetry_lock(text: str, ref: ManifestRef) -> ManifestOutcome:
         version = entry.get("version")
         if not isinstance(name, str):
             continue
-        resolved = version if isinstance(version, str) and version.strip() else None
+        raw_version = version.strip() if isinstance(version, str) else ""
+        resolved = raw_version if is_plausible_exact_version(raw_version) else None
         outcome.occurrences.append(
             _occurrence(
                 ref=ref,
@@ -379,11 +452,41 @@ def parse_poetry_lock(text: str, ref: ManifestRef) -> ManifestOutcome:
         )
         dependencies = entry.get("dependencies")
         if isinstance(dependencies, dict):
-            parent = name
-            for child in dependencies:
+            for child, child_spec in dependencies.items():
                 if isinstance(child, str):
-                    outcome.relationships.append((parent, child))
+                    outcome.relationships.append(
+                        LockRelation(
+                            parent=name,
+                            parent_version=resolved,
+                            child=child,
+                            child_version=_poetry_child_version(child_spec),
+                        )
+                    )
     return outcome
+
+
+def _poetry_child_version(spec: object) -> str | None:
+    """Exact child version when the lockfile records one, else ``None``.
+
+    Poetry records dependency constraints (often ranges); only a
+    version-shaped exact string is kept. Anything else stays unknown —
+    consumers must not treat it as a resolved version.
+    """
+    if isinstance(spec, str):
+        text = spec.strip()
+        if text.startswith("=="):
+            candidate = text[2:].strip()
+            return candidate if is_plausible_exact_version(candidate) else None
+        return text if is_plausible_exact_version(text) else None
+    if isinstance(spec, dict):
+        version = spec.get("version")
+        if isinstance(version, str):
+            text = version.strip()
+            if text.startswith("=="):
+                candidate = text[2:].strip()
+                return candidate if is_plausible_exact_version(candidate) else None
+            return text if is_plausible_exact_version(text) else None
+    return None
 
 
 # --- Pipfile.lock -----------------------------------------------------------
@@ -411,8 +514,16 @@ def parse_pipfile_lock(text: str, ref: ManifestRef) -> ManifestOutcome:
         for name, meta in entries.items():
             version: str | None = None
             if isinstance(meta, dict) and isinstance(meta.get("version"), str):
-                raw_version = meta["version"].strip()
-                version = raw_version.lstrip("=").strip() or None
+                candidate = meta["version"].strip().lstrip("=").strip()
+                # Only exact, version-shaped pins resolve. Wildcards (``*``),
+                # empty strings, ranges, and malformed values stay ``None``
+                # (unknown) — never guessed, never queried as exact.
+                version = candidate if is_plausible_exact_version(candidate) else None
+            elif not isinstance(meta, dict):
+                outcome.reasons.append(
+                    f"Pipfile.lock entry {name!r} has no parseable metadata; "
+                    "recorded with unknown version"
+                )
             outcome.occurrences.append(
                 _occurrence(
                     ref=ref,
@@ -455,6 +566,7 @@ def parse_package_json(text: str, ref: ManifestRef) -> ManifestOutcome:
             reasons=["unexpected JSON shape; recorded as failed, not clean"],
         )
     outcome = ManifestOutcome(ref=ref)
+    line_counts: dict[str, int] = {}
     for section, runtime in _NPM_SECTIONS:
         entries = document.get(section)
         if not isinstance(entries, dict):
@@ -474,7 +586,7 @@ def parse_package_json(text: str, ref: ManifestRef) -> ManifestOutcome:
                     section=f"package.json.{section}",
                     dependency_class=DependencyClass.DIRECT,
                     runtime_context=runtime,
-                    line=find_line_for(text, f'"{name}"'),
+                    line=_next_line(text, f'"{name}"', line_counts),
                     kind=kind,
                 )
             )
@@ -484,21 +596,47 @@ def parse_package_json(text: str, ref: ManifestRef) -> ManifestOutcome:
             "workspace/monorepo layout detected; occurrences keep their "
             "package/directory context and are not merged into one graph"
         )
+    if isinstance(document.get("overrides"), dict):
+        # Overrides pin/replace versions without declaring dependencies.
+        outcome.reasons.append(
+            "package.json `overrides` are version-resolution directives, not dependency "
+            "declarations; they are not evaluated as occurrences"
+        )
     return outcome
 
 
+_NPM_EXACT_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+([+-][A-Za-z0-9._\-+]+)?$")
+
+
 def _is_bare_npm_version(spec: str) -> bool:
-    text = spec.strip()
-    if not text:
-        return False
-    return text.replace(".", "").replace("-", "").replace("+", "").isdigit() and text[0].isdigit()
+    """True only for a full ``X.Y.Z`` version (optional prerelease/build).
+
+    Partial versions (``1``, ``1.2``) are npm ranges (``1.x``, ``1.2.x``),
+    not exact versions, and must never resolve: per DEP-REQ-001 a
+    range-derived version may never carry above Medium confidence, so partials
+    stay unresolved here and are recorded as limitations downstream instead
+    of being queried as exact.
+    """
+    return bool(_NPM_EXACT_VERSION_RE.match(spec.strip()))
 
 
 # --- package-lock.json ------------------------------------------------------
 
 
 def parse_package_lock_json(text: str, ref: ManifestRef) -> ManifestOutcome:
-    """Parse ``package-lock.json`` recorded tree (v1/v2/v3, static read)."""
+    """Parse ``package-lock.json`` recorded tree (v1/v2/v3, static read).
+
+    Authoritative representation per the npm format (``packages`` is ignored
+    by npm v7+ when present alongside legacy data, and v1 never has it):
+
+    * lockfileVersion 1 (or missing with only ``dependencies``) → the
+      ``dependencies`` tree, recursed so nested transitive nodes become
+      occurrences instead of vanishing into edge-only records;
+    * lockfileVersion 2 or 3 (or ``packages`` present with an unknown
+      version) → the ``packages`` map only. The legacy ``dependencies``
+      compatibility section of a v2 file describes the same nodes and is
+      never counted a second time.
+    """
     try:
         document = json.loads(text)
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
@@ -512,65 +650,194 @@ def parse_package_lock_json(text: str, ref: ManifestRef) -> ManifestOutcome:
             reasons=["unexpected JSON shape; recorded as failed, not clean"],
         )
     outcome = ManifestOutcome(ref=ref)
+    lock_version = document.get("lockfileVersion")
     packages = document.get("packages")
-    if isinstance(packages, dict):
-        for key, meta in packages.items():
-            if not isinstance(meta, dict) or not key:
-                continue
-            name = key.split("node_modules/")[-1].strip()
-            if not name:
-                continue
-            version = meta.get("version")
-            resolved = version.strip() if isinstance(version, str) and version.strip() else None
-            outcome.occurrences.append(
-                _occurrence(
-                    ref=ref,
-                    original=name,
-                    constraint=resolved,
-                    resolved=resolved,
-                    section="package-lock.packages",
-                    dependency_class=DependencyClass.UNKNOWN,
-                    runtime_context="development" if "dev" in str(meta.get("dev")) else "unknown",
-                    line=None,
-                    kind="registry" if resolved else "unknown",
-                )
-            )
-            dependencies = meta.get("dependencies")
-            if isinstance(dependencies, dict):
-                for child in dependencies:
-                    outcome.relationships.append((name, child))
     dependencies = document.get("dependencies")
-    if isinstance(dependencies, dict):
-        for name, meta in dependencies.items():
-            if not isinstance(meta, dict):
-                continue
-            version = meta.get("version")
-            resolved = version.strip() if isinstance(version, str) and version.strip() else None
-            outcome.occurrences.append(
-                _occurrence(
-                    ref=ref,
-                    original=name,
-                    constraint=resolved,
-                    resolved=resolved,
-                    section="package-lock.dependencies",
-                    dependency_class=DependencyClass.UNKNOWN,
-                    runtime_context="unknown",
-                    line=find_line_for(text, f'"{name}"'),
-                    kind="registry" if resolved else "unknown",
-                )
+    packages_map = packages if isinstance(packages, dict) else None
+    deps_map = dependencies if isinstance(dependencies, dict) else None
+    if lock_version == 1:
+        if deps_map is None:
+            outcome.ref = _with_state(ref, SupportState.FAILED)
+            outcome.reasons.append(
+                "lockfileVersion 1 without a `dependencies` tree; recorded as failed"
             )
-            requires = meta.get("requires")
-            if isinstance(requires, dict):
-                for child in requires:
-                    outcome.relationships.append((name, child))
-            nested = meta.get("dependencies")
-            if isinstance(nested, dict):
-                for child in nested:
-                    outcome.relationships.append((name, child))
+            return outcome
+        _parse_v1_dependencies(deps_map, text, outcome, ref)
+    elif packages_map is not None:
+        _parse_packages_map(packages_map, outcome, ref)
+        if deps_map is not None:
+            outcome.reasons.append(
+                f"lockfileVersion {lock_version}: authoritative `packages` section used; "
+                "legacy `dependencies` compatibility section describes the same nodes "
+                "and is not counted a second time"
+            )
+    elif deps_map is not None:
+        _parse_v1_dependencies(deps_map, text, outcome, ref)
+    else:
+        outcome.ref = _with_state(ref, SupportState.FAILED)
+        outcome.reasons.append("no recorded dependency entries found; recorded as failed")
+        return outcome
     if not outcome.occurrences:
         outcome.ref = _with_state(ref, SupportState.FAILED)
         outcome.reasons.append("no recorded dependency entries found; recorded as failed")
     return outcome
+
+
+def _lock_version_parts(raw: object) -> tuple[str | None, str]:
+    """Split a lockfile version value into (resolved, kind).
+
+    ``resolved`` is set only for registry version numbers shaped like an
+    exact version. Non-registry values (git specifiers, tarball URLs,
+    ``file:`` links per the npm format) resolve to ``None`` with an honest
+    kind instead of being queried as exact versions downstream.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None, "unknown"
+    text = raw.strip()
+    kind = classify_specifier_kind(text)
+    if kind == "registry" and is_plausible_exact_version(text):
+        return text, "registry"
+    if kind == "registry":
+        return None, "registry"
+    return None, kind
+
+
+def _parse_packages_map(
+    packages: dict[str, object], outcome: ManifestOutcome, ref: ManifestRef
+) -> None:
+    """Parse a v2/v3 ``packages`` location map (names are last path segments)."""
+    assert isinstance(packages, dict)
+    # First pass: occurrences plus a location -> exact-version map so edges
+    # below resolve to the tree instance npm actually recorded (nested first,
+    # mirroring npm resolution), instead of attributing by bare name only.
+    versions_by_key: dict[str, str | None] = {}
+    for key, meta in packages.items():
+        if not isinstance(meta, dict) or not key:
+            continue
+        name = key.split("node_modules/")[-1].strip()
+        if not name:
+            continue
+        resolved, kind = _lock_version_parts(meta.get("version"))
+        versions_by_key[key] = resolved
+        runtime = "development" if "dev" in str(meta.get("dev")) else "unknown"
+        outcome.occurrences.append(
+            _occurrence(
+                ref=ref,
+                original=name,
+                constraint=resolved,
+                resolved=resolved,
+                section="package-lock.packages",
+                dependency_class=DependencyClass.UNKNOWN,
+                runtime_context=runtime,
+                line=None,
+                kind=kind,
+            )
+        )
+    for key, meta in packages.items():
+        if not isinstance(meta, dict) or not key:
+            continue
+        parent = key.split("node_modules/")[-1].strip()
+        if not parent:
+            continue  # root entry: no parent package instance to attribute
+        parent_version = versions_by_key.get(key)
+        for edge_map in (meta.get("dependencies"), meta.get("optionalDependencies")):
+            if not isinstance(edge_map, dict):
+                continue
+            for child in edge_map:
+                outcome.relationships.append(
+                    LockRelation(
+                        parent=parent,
+                        parent_version=parent_version,
+                        child=child,
+                        child_version=_resolve_tree_instance(key, child, versions_by_key),
+                    )
+                )
+
+
+def _resolve_tree_instance(
+    parent_key: str, child: str, versions_by_key: dict[str, str | None]
+) -> str | None:
+    """Exact child version at the tree location npm recorded, if knowable.
+
+    npm nests a dependency under its parent when versions conflict, so the
+    edge resolves to the nested instance first and to the top-level instance
+    otherwise. ``None`` means the instance could not be established — never
+    a guessed version.
+    """
+    nested = f"{parent_key}/node_modules/{child}" if parent_key else f"node_modules/{child}"
+    if nested in versions_by_key:
+        return versions_by_key[nested]
+    for key, version in versions_by_key.items():
+        if key.split("node_modules/")[-1].strip() == child and key.count("node_modules/") == 1:
+            return version
+    return None
+
+
+def _parse_v1_dependencies(
+    dependencies: object, text: str, outcome: ManifestOutcome, ref: ManifestRef
+) -> None:
+    """Parse a v1 ``dependencies`` tree recursively (nested nodes kept)."""
+    if not isinstance(dependencies, dict):
+        return
+    _parse_v1_level(dependencies, text, outcome, ref, parent=None, parent_version=None, counts={})
+
+
+def _parse_v1_level(
+    level: dict[str, object],
+    text: str,
+    outcome: ManifestOutcome,
+    ref: ManifestRef,
+    parent: str | None,
+    parent_version: str | None,
+    counts: dict[str, int],
+) -> None:
+    for name, meta in level.items():
+        if not isinstance(meta, dict):
+            continue
+        resolved, kind = _lock_version_parts(meta.get("version"))
+        outcome.occurrences.append(
+            _occurrence(
+                ref=ref,
+                original=name,
+                constraint=resolved,
+                resolved=resolved,
+                section="package-lock.dependencies",
+                dependency_class=DependencyClass.UNKNOWN,
+                runtime_context="unknown",
+                line=_next_line(text, f'"{name}"', counts),
+                kind=kind,
+            )
+        )
+        if parent is not None:
+            outcome.relationships.append(
+                LockRelation(
+                    parent=parent,
+                    parent_version=parent_version,
+                    child=name,
+                    child_version=resolved,
+                )
+            )
+        requires = meta.get("requires")
+        if isinstance(requires, dict):
+            for child, child_spec in requires.items():
+                outcome.relationships.append(
+                    LockRelation(
+                        parent=name,
+                        parent_version=resolved,
+                        child=child,
+                        child_version=(
+                            child_spec.strip()
+                            if isinstance(child_spec, str)
+                            and is_plausible_exact_version(child_spec.strip())
+                            else None
+                        ),
+                    )
+                )
+        nested = meta.get("dependencies")
+        if isinstance(nested, dict):
+            _parse_v1_level(
+                nested, text, outcome, ref, parent=name, parent_version=resolved, counts=counts
+            )
 
 
 def parse_manifest_text(text: str, ref: ManifestRef) -> ManifestOutcome:
@@ -598,10 +865,3 @@ def parse_manifest_text(text: str, ref: ManifestRef) -> ManifestOutcome:
         ref=_with_state(ref, SupportState.UNSUPPORTED),
         reasons=[f"format {ref.format} is outside the V1.0 boundary"],
     )
-
-
-def redacted_constraint_text(constraint: str | None) -> str | None:
-    """Redact credentials from a constraint before evidence/logging use."""
-    if constraint is None:
-        return None
-    return redact_text(constraint)

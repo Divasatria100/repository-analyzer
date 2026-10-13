@@ -38,8 +38,8 @@ def classify_occurrences(outcomes: list[ManifestOutcome]) -> list[DependencyOccu
             direct_keys.setdefault(context, set()).update(
                 identity_key(ecosystem, occ.original_name) for occ in outcome.occurrences
             )
-        for _parent, child in outcome.relationships:
-            child_keys.setdefault(context, set()).add(identity_key(ecosystem, child))
+        for relation in outcome.relationships:
+            child_keys.setdefault(context, set()).add(identity_key(ecosystem, relation.child))
     classified: list[DependencyOccurrence] = []
     for outcome in outcomes:
         for occ in outcome.occurrences:
@@ -65,7 +65,9 @@ def _is_top_level_lockfile_node(outcome: ManifestOutcome, name: str) -> bool:
     if not outcome.relationships:
         return True
     key = identity_key(outcome.ref.ecosystem, name)
-    children = {identity_key(outcome.ref.ecosystem, child) for _, child in outcome.relationships}
+    children = {
+        identity_key(outcome.ref.ecosystem, relation.child) for relation in outcome.relationships
+    }
     return key not in children
 
 

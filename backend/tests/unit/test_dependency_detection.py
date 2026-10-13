@@ -108,3 +108,57 @@ def test_threshold_uses_centralized_strict_exceed() -> None:
     assert default_thresholds().dependencies == 200
     assert default_thresholds().exceeds("dependencies", 200) is False
     assert default_thresholds().exceeds("dependencies", 201) is True
+
+
+def _v2_dual_lockfile(count: int) -> str:
+    """A valid v2 lockfile with both `packages` and legacy `dependencies`."""
+    packages = ",".join(f'"node_modules/pkg{i}": {{"version": "1.0.0"}}' for i in range(count))
+    legacy = ",".join(f'"pkg{i}": {{"version": "1.0.0"}}' for i in range(count))
+    return (
+        '{"lockfileVersion": 2, "packages": {"": {"name": "demo"},'
+        f"{packages}" + '}, "dependencies": {' + f"{legacy}" + "}}"
+    )
+
+
+def test_v2_dual_representation_counts_each_package_once() -> None:
+    """FAIL-1: 200 real packages in both sections still count as 200."""
+    from app.analyzers.dependency.analyzer import DictManifestProvider, build_inventory
+
+    inventory = build_inventory(DictManifestProvider({"package-lock.json": _v2_dual_lockfile(200)}))
+    assert len(inventory.occurrences) == 200
+    result, _, _ = analyze_manifests({"package-lock.json": _v2_dual_lockfile(200)})
+    assert rule_result(result, "DEP-HIGH-DEPENDENCY-COUNT").findings == ()
+
+
+def test_v2_true_201_fires_threshold() -> None:
+    """FAIL-1: the threshold fires on 201 genuinely distinct occurrences."""
+    result, _, _ = analyze_manifests({"package-lock.json": _v2_dual_lockfile(201)})
+    (finding,) = rule_result(result, "DEP-HIGH-DEPENDENCY-COUNT").findings
+    assert "201" in finding.description
+
+
+def test_v2_distinct_transitives_and_versions_survive_dedup() -> None:
+    """FAIL-1/C3: dedup removes representations, never real nodes/versions."""
+    from app.analyzers.dependency.analyzer import DictManifestProvider, build_inventory
+
+    text = """\
+{
+  "lockfileVersion": 2,
+  "packages": {
+    "": {"name": "demo", "dependencies": {"a": "^1.0.0"}},
+    "node_modules/a": {"version": "1.0.0", "dependencies": {"b": "^2.0.0"}},
+    "node_modules/b": {"version": "2.0.0"},
+    "node_modules/c/node_modules/b": {"version": "2.1.0"}
+  },
+  "dependencies": {
+    "a": {"version": "1.0.0", "requires": {"b": "^2.0.0"}},
+    "b": {"version": "2.0.0"}
+  }
+}
+"""
+    inventory = build_inventory(DictManifestProvider({"package-lock.json": text}))
+    by_name: dict[str, list[str | None]] = {}
+    for occ in inventory.occurrences:
+        by_name.setdefault(occ.original_name, []).append(occ.resolved_version)
+    assert sorted(by_name["b"]) == ["2.0.0", "2.1.0"]  # both real versions kept
+    assert by_name["a"] == ["1.0.0"]  # counted once despite two representations

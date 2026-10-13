@@ -62,6 +62,17 @@ OSV_ECOSYSTEMS = {"pypi": "PyPI", "npm": "npm"}
 #: Batch sizing: OSV accepts up to 1000 queries per batch; we stay far below.
 MAX_BATCH_QUERIES = 100
 
+#: Follow-up page fetches per batch when responses carry ``next_page_token``
+#: (OSV paginates past ~1000 vulns per query / ~3000 per queryset).
+MAX_FOLLOWUP_PAGES = 10
+
+#: Hydration guards: per-query and per-``query_batch`` caps on ``GET
+#: /v1/vulns/{id}`` calls so one advisory-heavy package cannot produce
+#: unbounded traffic. Truncated positions are marked failed (explicit
+#: limitation downstream) while advisories already obtained are preserved.
+MAX_HYDRATIONS_PER_POSITION = 100
+MAX_HYDRATIONS_TOTAL = 1000
+
 #: Defensive cap on one decoded response body (advisories are small JSON).
 MAX_RESPONSE_BYTES = 1 * 1024 * 1024
 
@@ -113,32 +124,22 @@ class OsvClient:
 
     def __init__(self, client: ServiceClient) -> None:
         self._client = client
+        self._hydration_budget = MAX_HYDRATIONS_TOTAL
 
     def query_batch(self, queries: list[OsvQuery]) -> OsvOutcome:
         """Run batch queries with hydration; partial results are preserved."""
         outcome = OsvOutcome()
         if not queries:
             return outcome
+        self._hydration_budget = MAX_HYDRATIONS_TOTAL
         for chunk_start in range(0, len(queries), MAX_BATCH_QUERIES):
             chunk = queries[chunk_start : chunk_start + MAX_BATCH_QUERIES]
             self._query_chunk(chunk, chunk_start, outcome)
         return outcome
 
     def _query_chunk(self, chunk: list[OsvQuery], offset: int, outcome: OsvOutcome) -> None:
-        payload: dict[str, object] = {
-            "queries": [
-                {
-                    "package": {
-                        "name": query.package_name,
-                        "ecosystem": OSV_ECOSYSTEMS[query.ecosystem],
-                    },
-                    "version": query.version,
-                }
-                for query in chunk
-            ]
-        }
         try:
-            response = self._post_json("/v1/querybatch", payload)
+            response = self._post_json("/v1/querybatch", _batch_payload(chunk, None))
         except (ServiceTimeoutError, ServiceConnectionError, ServiceResponseError) as exc:
             outcome.transport_failed = True
             outcome.failure_reason = redact_text(str(exc)) or type(exc).__name__
@@ -159,7 +160,83 @@ class OsvClient:
             for position in range(len(chunk)):
                 outcome.failed_indexes.add(offset + position)
             return
-        for position, query in enumerate(chunk):
+        collected = self._collect_pages(chunk, offset, results, outcome)
+        for position in sorted(collected):
+            self._hydrate_position(chunk, offset, position, collected[position], outcome)
+
+    def _collect_pages(
+        self,
+        chunk: list[OsvQuery],
+        offset: int,
+        first_results: list[object],
+        outcome: OsvOutcome,
+    ) -> dict[int, list[object]]:
+        """Gather vuln entries across initial + follow-up pages per position.
+
+        Follow-up requests carry ``page_token`` only for queries whose result
+        included ``next_page_token`` (the documented querybatch contract).
+        Token loops and page budgets stop the walk; positions left incomplete
+        are marked failed while entries already collected are preserved.
+        """
+        collected: dict[int, list[object]] = {}
+        pending: dict[int, str] = {}
+        self._absorb_page(chunk, offset, first_results, collected, pending, outcome)
+        seen_tokens: set[tuple[int, str]] = set()
+        pages = 0
+        while pending and pages < MAX_FOLLOWUP_PAGES:
+            pages += 1
+            ordered = sorted(pending)
+            payload = _batch_payload([chunk[i] for i in ordered], [pending[i] for i in ordered])
+            try:
+                response = self._post_json("/v1/querybatch", payload)
+            except (ServiceTimeoutError, ServiceConnectionError, ServiceResponseError):
+                for position in ordered:
+                    outcome.failed_indexes.add(offset + position)
+                pending.clear()
+                break
+            results = _decode_results(response)
+            if results is None or len(results) != len(ordered):
+                for position in ordered:
+                    outcome.failed_indexes.add(offset + position)
+                pending.clear()
+                break
+            next_pending: dict[int, str] = {}
+            for slot, position in enumerate(ordered):
+                entry = results[slot]
+                if not isinstance(entry, dict):
+                    outcome.failed_indexes.add(offset + position)
+                    continue
+                vulns = entry.get("vulns", [])
+                if not isinstance(vulns, list):
+                    outcome.failed_indexes.add(offset + position)
+                    continue
+                collected.setdefault(position, []).extend(
+                    item for item in vulns if isinstance(item, dict)
+                )
+                token = entry.get("next_page_token")
+                if isinstance(token, str) and token:
+                    if (position, token) in seen_tokens:
+                        # Looping token: stop, keep what was collected, mark it.
+                        outcome.failed_indexes.add(offset + position)
+                        continue
+                    seen_tokens.add((position, token))
+                    next_pending[position] = token
+            pending = next_pending
+        for position in pending:
+            # Page budget exhausted with results still outstanding.
+            outcome.failed_indexes.add(offset + position)
+        return collected
+
+    def _absorb_page(
+        self,
+        chunk: list[OsvQuery],
+        offset: int,
+        results: list[object],
+        collected: dict[int, list[object]],
+        pending: dict[int, str],
+        outcome: OsvOutcome,
+    ) -> None:
+        for position in range(len(chunk)):
             if position >= len(results):
                 outcome.failed_indexes.add(offset + position)
                 continue
@@ -171,19 +248,64 @@ class OsvClient:
             if not isinstance(vulns, list):
                 outcome.failed_indexes.add(offset + position)
                 continue
-            hydrated: list[Advisory] = []
-            failed = False
-            for vuln in vulns:
-                if not isinstance(vuln, dict) or not isinstance(vuln.get("id"), str):
-                    continue
-                advisory = self._hydrate(vuln["id"], query)
-                if advisory is None:
-                    failed = True
-                else:
-                    hydrated.append(advisory)
-            outcome.advisories[offset + position] = hydrated
-            if failed:
-                outcome.failed_indexes.add(offset + position)
+            collected[position] = [item for item in vulns if isinstance(item, dict)]
+            token = entry.get("next_page_token")
+            if isinstance(token, str) and token:
+                pending[position] = token
+
+    def _hydrate_position(
+        self,
+        chunk: list[OsvQuery],
+        offset: int,
+        position: int,
+        entries: list[object],
+        outcome: OsvOutcome,
+    ) -> None:
+        query = chunk[position]
+        usable = [
+            entry
+            for entry in entries
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+        ]
+        if entries and not usable:
+            # Structurally present but content-unusable: never read as clean.
+            outcome.advisories[offset + position] = []
+            outcome.failed_indexes.add(offset + position)
+            return
+        # The same advisory listed twice (e.g. a replayed page) is one advisory.
+        deduped: list[dict[str, object]] = []
+        seen_ids: set[str] = set()
+        for entry in usable:
+            assert isinstance(entry, dict)
+            advisory_id = str(entry["id"])
+            if advisory_id in seen_ids:
+                continue
+            seen_ids.add(advisory_id)
+            deduped.append(entry)
+        usable = deduped
+        truncated = False
+        if len(usable) > MAX_HYDRATIONS_PER_POSITION:
+            usable = usable[:MAX_HYDRATIONS_PER_POSITION]
+            truncated = True
+        if len(entries) != len(usable):
+            # Some entries lacked usable IDs; the rest are still assessed.
+            truncated = True
+        hydrated: list[Advisory] = []
+        failed = truncated
+        for entry in usable:
+            assert isinstance(entry, dict)
+            if self._hydration_budget <= 0:
+                failed = True
+                break
+            self._hydration_budget -= 1
+            advisory = self._hydrate(str(entry["id"]), query)
+            if advisory is None:
+                failed = True
+            else:
+                hydrated.append(advisory)
+        outcome.advisories[offset + position] = hydrated
+        if failed:
+            outcome.failed_indexes.add(offset + position)
 
     def _hydrate(self, advisory_id: str, query: OsvQuery) -> Advisory | None:
         """Fetch one advisory record; None when unavailable (never fabricated)."""
@@ -255,6 +377,23 @@ class OsvClient:
         if isinstance(last_error, httpx.TransportError):
             raise ServiceConnectionError("OSV could not be reached.") from last_error
         raise ServiceResponseError("OSV request failed.", 0)
+
+
+def _batch_payload(queries: list[OsvQuery], tokens: list[str] | None) -> dict[str, object]:
+    """Build a querybatch body; ``tokens`` carries per-query page tokens."""
+    body: list[dict[str, object]] = []
+    for index, query in enumerate(queries):
+        entry: dict[str, object] = {
+            "package": {
+                "name": query.package_name,
+                "ecosystem": OSV_ECOSYSTEMS[query.ecosystem],
+            },
+            "version": query.version,
+        }
+        if tokens is not None and index < len(tokens):
+            entry["page_token"] = tokens[index]
+        body.append(entry)
+    return {"queries": body}
 
 
 def _to_service_error(error: httpx.HTTPError) -> ServiceConnectionError | ServiceTimeoutError:

@@ -7,7 +7,7 @@ module only computes the static detections plus their limitations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.analyzers.dependency.identity import identity_key
 from app.analyzers.dependency.models import DependencyOccurrence
@@ -256,15 +256,3 @@ def _is_unmappable(canonical: str) -> bool:
     """Conservative guard: never claim when even a heuristic is unreliable."""
     # Namespace-style or single-letter names without mapping stay inconclusive.
     return len(canonical) <= 1
-
-
-@dataclass
-class DetectionBundle:
-    """Local detection outputs shared by the analyzer rules."""
-
-    occurrences: list[DependencyOccurrence] = field(default_factory=list)
-    duplicates: list[DuplicateVersionGroup] = field(default_factory=list)
-    duplicate_limitations: list[str] = field(default_factory=list)
-    scope_counts: list[ScopeCount] = field(default_factory=list)
-    unused: list[UnusedCandidate] = field(default_factory=list)
-    unused_limitations: list[str] = field(default_factory=list)

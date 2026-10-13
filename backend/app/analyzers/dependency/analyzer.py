@@ -285,22 +285,33 @@ def introduced_by_chains(
     """Map each resolved version to the lockfile parents introducing it.
 
     Built only from statically recorded relationships (``introduced_by``
-    chains per DEP-REQ-002); versions without recorded parents carry an
-    empty chain rather than a fabricated one.
+    chains per DEP-REQ-002). Matching is version-aware: when an edge records
+    an exact child version, only occurrences with that resolved version
+    receive the parent; edges with range/unknown child versions attribute to
+    every same-name occurrence in that file (the only supportable reading —
+    e.g. Poetry constraints carry no exact version). Versions without
+    recorded parents carry an empty chain rather than a fabricated one.
     """
+    from app.analyzers.dependency.identity import is_plausible_exact_version
+
     parents: dict[str, dict[str, set[str]]] = {}
     for outcome in outcomes:
         ecosystem = outcome.ref.ecosystem
-        for parent, child in outcome.relationships:
+        for relation in outcome.relationships:
+            if identity_key(ecosystem, relation.child) != f"{ecosystem}:{group.canonical_name}":
+                continue
+            # Group members share one normalized identity by construction;
+            # only the ecosystem and resolved version still discriminate.
             for occ in group.occurrences:
-                if (
-                    occ.ecosystem == ecosystem
-                    and identity_key(ecosystem, child) == f"{ecosystem}:{occ.canonical_name}"
-                    and occ.resolved_version is not None
-                ):
-                    parents.setdefault(occ.resolved_version, {}).setdefault(
-                        outcome.ref.path, set()
-                    ).add(parent)
+                if occ.ecosystem != ecosystem or occ.resolved_version is None:
+                    continue
+                child_version = relation.child_version
+                if child_version is not None and is_plausible_exact_version(child_version):
+                    if occ.resolved_version.strip() != child_version.strip():
+                        continue
+                parents.setdefault(occ.resolved_version, {}).setdefault(
+                    outcome.ref.path, set()
+                ).add(relation.parent)
     chains: dict[str, list[str]] = {}
     for version in group.versions:
         entries: list[str] = []

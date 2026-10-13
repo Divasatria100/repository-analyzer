@@ -197,3 +197,15 @@ def test_analyzer_module_references_static_pipeline() -> None:
     assert "OsvClient" in text or "osv_client" in text
     assert analyzer_module.DependencyAnalyzer.id == "dependency"
     assert osv_module.OSV_BASE_URL == "https://api.osv.dev"
+
+
+def test_osv_gateway_has_no_execution_or_registry_tokens() -> None:
+    """C12: the gateway allows only the advisory endpoint over HTTPS."""
+    gateway = Path(__file__).resolve().parents[2] / "app" / "services" / "osv_gateway.py"
+    code = _code_without_strings_and_comments(gateway)
+    for token in FORBIDDEN_TOKENS:
+        assert token not in code, f"osv_gateway.py: {token!r}"
+    text = gateway.read_text(encoding="utf-8")
+    assert "https://api.osv.dev" in text
+    assert "pypi.org" not in text
+    assert "registry.npmjs" not in text

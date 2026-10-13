@@ -83,14 +83,31 @@ class DependencyOccurrence:
     kind: str = "registry"  # registry | url | vcs | path | editable | unknown
 
 
+@dataclass(frozen=True)
+class LockRelation:
+    """One statically recorded lockfile edge (names raw, versions optional).
+
+    ``parent``/``child`` are package names as written in the lockfile;
+    versions are exact strings when the lockfile records them for that node
+    (npm ``packages`` entries) and ``None`` when it only records a range or
+    nothing (npm ``requires`` maps, Poetry dependency constraints). A
+    ``None`` version never fabricates an edge version — consumers must treat
+    it as unknown provenance, not as a wildcard.
+    """
+
+    parent: str
+    parent_version: str | None
+    child: str
+    child_version: str | None
+
+
 @dataclass
 class ManifestOutcome:
     """Parse product of one manifest/lockfile (never raises past this point)."""
 
     ref: ManifestRef
     occurrences: list[DependencyOccurrence] = field(default_factory=list)
-    # (parent_canonical, child_canonical) edges read statically from lockfiles.
-    relationships: list[tuple[str, str]] = field(default_factory=list)
+    relationships: list[LockRelation] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)  # unsupported/partial notes
 
     @property
@@ -113,11 +130,3 @@ class Advisory:
     ecosystem: str = ""
     package_name: str = ""
     affected_version: str | None = None
-
-
-@dataclass(frozen=True)
-class AdvisoryAssessment:
-    """Per-occurrence advisory lookup state (never clean-by-omission)."""
-
-    state: str  # assessed | not_assessable | failed | skipped
-    reason: str = ""
