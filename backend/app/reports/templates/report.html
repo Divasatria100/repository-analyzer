@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+</head>
+<body>
+<h1>{{ title }}</h1>
+<section><h2>Repository</h2><ul>
+<li>URL: <code>{{ repository.url }}</code></li>
+<li>Owner: <code>{{ repository.owner }}</code></li>
+<li>Name: <code>{{ repository.name }}</code></li>
+</ul></section>
+<section><h2>Analysis Context</h2><ul>
+<li>Analysis ID: <code>{{ analysis.analysis_id }}</code></li>
+<li>Timestamp: <code>{{ analysis.timestamp }}</code></li>
+<li>Analyzer version: <code>{{ analysis.analyzer_version }}</code></li>
+<li>Rule-set version: <code>{{ analysis.rule_set_version }}</code></li>
+<li>Configuration: <code>{{ analysis.configuration }}</code></li>
+<li>Advisory data: <code>{{ analysis.advisory_data }}</code></li>
+<li>Branch: <code>{{ analyzed.branch }}</code></li>
+<li>Commit: <code>{{ analyzed.commit }}</code></li>
+</ul></section>
+{% if summary_available %}
+<section><h2>Summary</h2><ul>
+{% for entry in summary_areas %}
+<li>{{ entry.area }}: state <code>{{ entry.state }}</code>, findings <code>{{ entry.findings }}</code></li>
+{% endfor %}
+<li>Files: <code>{{ summary_files }}</code></li>
+<li>Languages: <code>{{ summary_languages }}</code></li>
+</ul></section>
+{% else %}
+<section><h2>Summary</h2><p>Summary is not available for this analysis state.</p></section>
+{% endif %}
+{% for area in areas %}
+<section><h2>{{ area.title }}</h2>
+<p>State: <code>{{ area.state }}</code>{% if area.reason %} — {{ area.reason }}{% endif %}</p>
+{% if not area.available %}
+<p>This section is not available for this analysis state.</p>
+{% else %}
+{% if area.graph %}
+<p>Modules: {{ area.graph.module_count }}, relationships: {{ area.graph.rel_count }}.</p>
+<table><thead><tr><th>Module</th><th>Layer</th><th>Partially represented</th><th>Findings</th></tr></thead>
+<tbody>{% for node in area.graph.nodes %}<tr><td><code>{{ node.node_id }}</code></td><td><code>{{ node.layer }}</code></td><td><code>{{ node.partial }}</code></td><td><code>{{ node.count }}</code></td></tr>{% endfor %}</tbody></table>
+<ul>{% for edge in area.graph.edges %}<li><code>{{ edge.source }}</code> → <code>{{ edge.target }}</code></li>{% endfor %}</ul>
+{% endif %}
+{% if area.dep_count is not none %}
+<p>Dependency occurrences: {{ area.dep_count }}.</p>
+{% endif %}
+<p>Findings: {{ area.finding_count }}.</p>
+{% for finding in area.findings %}
+<article><h3><code>{{ finding.finding_id }}</code> {{ finding.rule_id }}</h3><ul>
+<li>Severity: <code>{{ finding.severity }}</code></li>
+<li>Confidence: <code>{{ finding.confidence }}</code></li>
+<li>Explanation: {{ finding.explanation }}</li>
+{% if finding.impact is not none %}<li>Impact: {{ finding.impact }}</li>{% endif %}
+<li>Recommendation: {{ finding.recommendation }}</li></ul>
+{% if finding.evidence %}
+<p>Evidence (redacted: <code>{{ finding.evidence.redacted }}</code>, lines {{ finding.evidence.start }}–{{ finding.evidence.end }}):</p>
+<pre>{{ finding.evidence.text }}</pre>
+{% endif %}
+</article>
+{% endfor %}
+{% endif %}
+</section>
+{% endfor %}
+{% if files_available %}
+<section><h2>Files</h2><ul>
+{% for entry in files %}<li><code>{{ entry.path }}</code> ({{ entry.file_type }}, {{ entry.support }}, parse <code>{{ entry.parse_result }}</code>, findings {{ entry.finding_count }})</li>{% endfor %}
+</ul></section>
+{% else %}
+<section><h2>Files</h2><p>Files are not available for this analysis state.</p></section>
+{% endif %}
+{% if finding_rows %}
+<section><h2>Findings</h2><table><thead><tr><th>Finding</th><th>Category</th><th>Rule</th><th>Severity</th><th>Location</th></tr></thead>
+<tbody>{% for row in finding_rows %}<tr><td><code>{{ row.finding_id }}</code></td><td><code>{{ row.area }}</code></td><td><code>{{ row.rule_id }}</code></td><td><code>{{ row.severity }}</code></td><td><code>{{ row.path }}</code></td></tr>{% endfor %}</tbody></table></section>
+{% else %}
+<section><h2>Findings</h2><p>No findings are available in this result.</p></section>
+{% endif %}
+{% if comparison %}
+<section><h2>Comparison</h2><ul>
+<li>Comparable: <code>{{ comparison.comparable }}</code></li>
+{% for item in comparison.counts %}<li>{{ item.key }}: {{ item.count }}</li>{% endfor %}
+</ul></section>
+{% endif %}
+<section><h2>Limitations / Warnings</h2><ul>
+<li>Outcome: <code>{{ status.outcome }}</code></li>
+<li>Stage: <code>{{ status.stage }}</code></li>
+<li>Explanation: {{ status.explanation }}</li>
+{% for domain in status.domains %}<li>Area <code>{{ domain.area }}</code>: <code>{{ domain.state }}</code>{% if domain.reason %} — {{ domain.reason }}{% endif %}</li>{% endfor %}
+{% if status.has_limitations %}
+<li>Recorded limitations:<ul>
+{% for item in status.limitations %}<li><code>{{ item }}</code></li>{% endfor %}
+</ul></li>
+{% else %}
+<li>No limitations recorded.</li>
+{% endif %}
+</ul></section>
+<section><h2>Static Analysis Statement</h2><p>Findings are static-analysis indicators to be validated by manual review. Static analysis cannot prove exploitability or the absence of issues; the recorded limitations above qualify how far these results can be trusted.</p></section>
+</body>
+</html>
