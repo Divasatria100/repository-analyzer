@@ -189,6 +189,7 @@ class Finding:
     severity_factors: tuple[str, ...] = ()
     confidence_factors: tuple[str, ...] = ()
     applied_thresholds: tuple[tuple[str, object], ...] = field(default_factory=tuple)
+    subject_key: str = ""
 
     def to_dict(self) -> dict[str, object]:
         """Deterministic serialization (sorted keys, stable enum values)."""
@@ -214,6 +215,7 @@ class Finding:
             "applied_thresholds": [
                 [name, value] for name, value in sorted(self.applied_thresholds)
             ],
+            "subject_key": self.subject_key,
         }
 
     @classmethod
@@ -264,6 +266,7 @@ class Finding:
             applied_thresholds=tuple(
                 (str(pair[0]), pair[1]) for pair in thresholds if isinstance(pair, list)
             ),
+            subject_key=str(data.get("subject_key", "")),
         )
 
 
@@ -342,4 +345,5 @@ def create_finding(
         severity_factors=severity_factors,
         confidence_factors=confidence_factors,
         applied_thresholds=applied_thresholds,
+        subject_key=subject_key,
     )

@@ -64,14 +64,26 @@ class File(Base, TimestampMixin):
 
 
 class Limitation(Base, TimestampMixin):
-    """Explicit record for skipped/rejected/limit-affected content."""
+    """Explicit record for skipped/rejected/limit-affected content.
+
+    Indexing writes scope ``index``/``file`` rows; aggregation adds
+    analysis/area/rule/manifest/advisory/resource rows with optional area,
+    rule, and file references (docs/12 §4.9).
+    """
 
     __tablename__ = "limitations"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
     analysis_id: Mapped[str] = mapped_column(ForeignKey("analyses.id"), nullable=False, index=True)
-    # Current vocabulary: "index" (subtree/limit scope) and "file"
-    # (single entry). Area/rule scopes arrive with aggregation.
     scope_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    area: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    rule_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rule_set_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    file_id: Mapped[str | None] = mapped_column(ForeignKey("files.id"), nullable=True)
     file_path: Mapped[str | None] = mapped_column(String(4096), nullable=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # No database-level foreign key to rules here: the limitations table
+    # predates rules and SQLite cannot ADD CONSTRAINT via ALTER. Rule
+    # references are validated in the persistence gateway instead
+    # (docs/12 §15: constraints or repository-level checks).

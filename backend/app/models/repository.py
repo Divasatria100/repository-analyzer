@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -83,6 +83,14 @@ class Analysis(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     workspace_path: Mapped[str | None] = mapped_column(String(4096), nullable=True)
+    analysis_config: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    advisory_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    advisory_consulted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    advisory_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    report_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cleanup_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     repository: Mapped[Repository] = relationship(back_populates="analyses")
 
