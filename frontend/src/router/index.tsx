@@ -1,73 +1,89 @@
 import { createBrowserRouter, type RouteObject } from "react-router";
-import { RoutePlaceholder } from "../pages/RoutePlaceholder";
+import { AppShell } from "../components/AppShell";
+import { DashboardPage } from "../pages/DashboardPage";
+import { NewAnalysisPage } from "../pages/NewAnalysisPage";
+import {
+  AnalysisStatusPage,
+  HistoryPage,
+  NotFoundPage,
+  SectionPlaceholder,
+  SettingsPage,
+} from "../pages/PlaceholderPages";
 import { AnalysisLayout } from "./AnalysisLayout";
 import { ANALYSIS_ID_PARAM, ROUTES } from "./routes";
 
-// Route architecture per docs/14-ui-requirements.md (Section 5).
-// No page content, no auth guards, no data loading — placeholders only.
+// Route architecture per docs/14-ui-requirements.md (Sections 4–5).
+// Every page renders inside the shared AppShell. The New Analysis workflow
+// and the analysis status gate are fully implemented (TASK-180–188);
+// workspace sections keep honest placeholders until their phases.
 // Exported as data so tests can build a memory router from the same tree.
 export const routes: RouteObject[] = [
   {
-    path: ROUTES.root,
-    element: <RoutePlaceholder title="Dashboard" />,
-  },
-  {
-    path: ROUTES.dashboard,
-    element: <RoutePlaceholder title="Dashboard" />,
-  },
-  {
-    path: ROUTES.analysisNew,
-    element: <RoutePlaceholder title="New Analysis" />,
-  },
-  {
-    path: `/analysis/:${ANALYSIS_ID_PARAM}`,
-    element: <AnalysisLayout />,
+    element: <AppShell />,
     children: [
       {
-        index: true,
-        element: <RoutePlaceholder title="Overview" />,
+        path: ROUTES.root,
+        element: <DashboardPage />,
       },
       {
-        path: "overview",
-        element: <RoutePlaceholder title="Overview" />,
+        path: ROUTES.dashboard,
+        element: <DashboardPage />,
       },
       {
-        path: "security",
-        element: <RoutePlaceholder title="Security" />,
+        path: ROUTES.analysisNew,
+        element: <NewAnalysisPage />,
       },
       {
-        path: "architecture",
-        element: <RoutePlaceholder title="Architecture" />,
+        path: `/analysis/:${ANALYSIS_ID_PARAM}`,
+        element: <AnalysisLayout />,
+        children: [
+          {
+            index: true,
+            element: <AnalysisStatusPage />,
+          },
+          {
+            path: "overview",
+            element: <SectionPlaceholder title="Overview" />,
+          },
+          {
+            path: "security",
+            element: <SectionPlaceholder title="Security" />,
+          },
+          {
+            path: "architecture",
+            element: <SectionPlaceholder title="Architecture" />,
+          },
+          {
+            path: "dependencies",
+            element: <SectionPlaceholder title="Dependencies" />,
+          },
+          {
+            path: "code-structure",
+            element: <SectionPlaceholder title="Code Structure" />,
+          },
+          {
+            path: "files",
+            element: <SectionPlaceholder title="Files" />,
+          },
+          {
+            path: "findings",
+            element: <SectionPlaceholder title="Findings" />,
+          },
+        ],
       },
       {
-        path: "dependencies",
-        element: <RoutePlaceholder title="Dependencies" />,
+        path: ROUTES.history,
+        element: <HistoryPage />,
       },
       {
-        path: "code-structure",
-        element: <RoutePlaceholder title="Code Structure" />,
+        path: ROUTES.settings,
+        element: <SettingsPage />,
       },
       {
-        path: "files",
-        element: <RoutePlaceholder title="Files" />,
-      },
-      {
-        path: "findings",
-        element: <RoutePlaceholder title="Findings" />,
+        path: "*",
+        element: <NotFoundPage />,
       },
     ],
-  },
-  {
-    path: ROUTES.history,
-    element: <RoutePlaceholder title="History" />,
-  },
-  {
-    path: ROUTES.settings,
-    element: <RoutePlaceholder title="Settings" />,
-  },
-  {
-    path: "*",
-    element: <RoutePlaceholder title="Not Found" />,
   },
 ];
 

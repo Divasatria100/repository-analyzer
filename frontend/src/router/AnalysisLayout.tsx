@@ -1,13 +1,16 @@
 import { Outlet } from "react-router";
-import { RoutePlaceholder } from "../pages/RoutePlaceholder";
+import { AnalysisTabs } from "../components/AnalysisTabs";
 
-// Routing foundation (docs/14-ui-requirements.md, Section 5).
-// Elements are minimal placeholders; page content arrives in later phases.
+// Analysis workspace frame (docs/14-ui-requirements.md, Section 8).
+// The shell stays visible; workspace tabs live inside the workspace, never
+// in the global sidebar. Section contents arrive in later phases.
 export function AnalysisLayout() {
   return (
-    <>
-      <RoutePlaceholder title="Analysis" />
-      <Outlet />
-    </>
+    <div className="min-w-0">
+      <AnalysisTabs />
+      <div className="pt-6">
+        <Outlet />
+      </div>
+    </div>
   );
 }
