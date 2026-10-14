@@ -37,7 +37,7 @@ ANALYSIS_STAGES = frozenset(
     }
 )
 
-TERMINAL_OUTCOMES = frozenset({"Completed", "CompletedWithLimitations", "Failed"})
+TERMINAL_OUTCOMES = frozenset({"Completed", "Completed with limitations", "Failed"})
 
 ORIGIN_REQUESTED = "requested"
 ORIGIN_DEFAULTED = "defaulted"

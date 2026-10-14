@@ -143,13 +143,17 @@ def compute_identity_key(
 
     Stable across repeated analyses when inputs are unchanged; independent
     of object identity, UUIDs, execution order, and workspace paths.
-    Severity, confidence, versions, and timestamps are deliberately excluded
-    so retuning or rerunning never renames a logical finding. Evidence text
-    and secrets are never inputs (docs/13 §8.1, SEC-REQ-055).
+    ``analysis_id`` is accepted for call-site compatibility but is
+    deliberately excluded from the digest: the same logical finding must be
+    recognizable across analyses (docs/13 §8.1), so run-scoped values must
+    not rename it. Severity, confidence, versions, and timestamps are
+    deliberately excluded so retuning or rerunning never renames a logical
+    finding. Evidence text and secrets are never inputs (docs/13 §8.1,
+    SEC-REQ-055).
     """
+    del analysis_id
     canonical = json.dumps(
         [
-            analysis_id,
             rule_id,
             category,
             path,

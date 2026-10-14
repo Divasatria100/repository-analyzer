@@ -18,6 +18,7 @@ from app.models.repository import (
     Repository,
     utcnow,
 )
+from app.models.results import AnalysisSnapshot
 from app.repository.identity import RepositoryIdentity
 
 
@@ -80,6 +81,22 @@ def set_stage(session: Session, analysis: Analysis, stage: str) -> Analysis:
     return analysis
 
 
+def _require_mutable_context(session: Session, analysis: Analysis) -> None:
+    """Reject context/workspace writes on terminal or sealed analyses.
+
+    Either condition alone refuses the write: terminal state blocks
+    lifecycle mutation, and a sealed snapshot freezes provenance even if
+    state bookkeeping were ever inconsistent.
+    """
+    if analysis.outcome is not None:
+        raise ValueError("Terminal analysis lifecycle must not change.")
+    sealed = session.scalar(
+        select(AnalysisSnapshot.id).where(AnalysisSnapshot.analysis_id == analysis.id)
+    )
+    if sealed is not None:
+        raise ValueError("Sealed analysis context must not change.")
+
+
 def record_context_resolution(
     session: Session,
     analysis: Analysis,
@@ -90,6 +107,7 @@ def record_context_resolution(
     commit_origin: str,
 ) -> Analysis:
     """Record immutable context before retrieval begins (PIPE-REQ-006)."""
+    _require_mutable_context(session, analysis)
     analysis.resolved_branch = resolved_branch
     analysis.branch_origin = branch_origin
     analysis.resolved_commit_sha = resolved_commit_sha
@@ -100,6 +118,7 @@ def record_context_resolution(
 
 def record_workspace(session: Session, analysis: Analysis, workspace_path: str) -> Analysis:
     """Attach the disposable workspace path for cleanup reconciliation."""
+    _require_mutable_context(session, analysis)
     analysis.workspace_path = workspace_path
     session.flush()
     return analysis

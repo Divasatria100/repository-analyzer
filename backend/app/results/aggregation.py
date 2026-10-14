@@ -381,9 +381,15 @@ def aggregate(
 
     Findings dedupe by stable identity (first in sorted order wins; the
     collision is recorded, never silent). No finding is synthesized, no
-    value is rescaled, and no score is computed.
+    value is rescaled, and no score is computed. Exactly one input bundle
+    per domain is expected: duplicate categories raise instead of
+    silently discarding one bundle's states.
     """
     registered_rules = registered_rules or {}
+    categories = [bundle.category for bundle in domains]
+    duplicates = sorted({category for category in categories if categories.count(category) > 1})
+    if duplicates:
+        raise ValueError(f"Duplicate domain inputs for categories: {duplicates!r}.")
     seen: set[str] = set()
     findings: list[Finding] = []
     duplicate_notices: list[str] = []

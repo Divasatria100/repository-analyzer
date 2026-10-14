@@ -985,8 +985,9 @@ def seal_snapshot(session: Session, analysis_id: str) -> AnalysisSnapshot:
 
     Validates the completed outcome, exactly four domain states, rule
     evaluations covering every registered rule of areas with present
-    sections, and the required explanation — then inserts the single
-    snapshot row that freezes the analysis.
+    sections, the required explanation, and strict Completed purity (no
+    recorded limitation) — then inserts the single snapshot row that
+    freezes the analysis.
     """
     analysis = session.get(Analysis, analysis_id)
     if analysis is None:
@@ -1007,6 +1008,13 @@ def seal_snapshot(session: Session, analysis_id: str) -> AnalysisSnapshot:
         and not (analysis.explanation or "").strip()
     ):
         raise IncompleteSnapshotError("Completed with limitations requires an explanation.")
+    if analysis.outcome == "Completed" and (
+        session.scalar(select(LimitationRow.id).where(LimitationRow.analysis_id == analysis_id))
+        is not None
+    ):
+        raise IncompleteSnapshotError(
+            "Completed must not coexist with a recorded limitation (docs/13 §6.6)."
+        )
     domains = session.scalars(
         select(DomainState).where(DomainState.analysis_id == analysis_id)
     ).all()

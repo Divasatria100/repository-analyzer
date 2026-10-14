@@ -56,3 +56,61 @@ def test_identity_excludes_volatile_fields() -> None:
 
     assert make_finding(severity=Severity.LOW).identity_key == base.identity_key
     assert make_finding(confidence=Confidence.LOW).identity_key == base.identity_key
+
+
+def test_identity_stable_across_analyses() -> None:
+    """The same logical finding in two analyses shares its identity key.
+
+    ``analysis_id`` is run scope, not finding identity (docs/13 §8.1):
+    cross-analysis comparison depends on this stability.
+    """
+    first = make_finding(analysis_id="analysis-1")
+    second = make_finding(analysis_id="analysis-2")
+    assert first.identity_key == second.identity_key
+    direct = compute_identity_key(
+        analysis_id="analysis-1",
+        rule_id="SEC-X-1",
+        category="security",
+        path="f.py",
+        start_line=1,
+        end_line=1,
+        start_column=0,
+        end_column=0,
+        subject_key="s",
+    )
+    assert direct == compute_identity_key(
+        analysis_id="analysis-2",
+        rule_id="SEC-X-1",
+        category="security",
+        path="f.py",
+        start_line=1,
+        end_line=1,
+        start_column=0,
+        end_column=0,
+        subject_key="s",
+    )
+
+
+def test_occurrence_index_distinguishes_repeated_subjects() -> None:
+    """Findings sharing every component except occurrence still differ."""
+    base = {
+        "analysis_id": "a",
+        "rule_id": "SEC-X-1",
+        "category": "security",
+        "path": "f.py",
+        "start_line": 1,
+        "end_line": 1,
+        "start_column": 0,
+        "end_column": 0,
+        "subject_key": "s",
+    }
+    assert compute_identity_key(**base) == compute_identity_key(**base)
+    assert compute_identity_key(**base, occurrence_index=1) != compute_identity_key(**base)
+
+
+def test_identity_and_subject_survive_serialization_round_trip() -> None:
+    """Serialization preserves the computed identity and subject key."""
+    finding = make_finding(analysis_id="analysis-9", subject_key="spot")
+    rebuilt = type(finding).from_dict(finding.to_dict())
+    assert rebuilt.identity_key == finding.identity_key
+    assert rebuilt.subject_key == "spot"

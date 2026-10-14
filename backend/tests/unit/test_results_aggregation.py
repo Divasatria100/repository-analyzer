@@ -159,3 +159,9 @@ def test_default_configuration_shape() -> None:
 
 def test_advisory_info_defaults_unavailable() -> None:
     assert AdvisoryInfo(source="OSV").status == "Unavailable"
+
+
+def test_duplicate_domain_categories_rejected() -> None:
+    meta = AnalysisMeta(analysis_id="a" * 32, repository_id="r" * 32)
+    with pytest.raises(ValueError, match="Duplicate domain inputs"):
+        aggregate(meta, [], [_bundle(), _bundle()])
