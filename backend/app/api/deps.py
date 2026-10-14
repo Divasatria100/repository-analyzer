@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.core.database import create_engine_from_settings, create_session_factory, session_scope
+from app.repository.github import GitHubClient, github_client_from_settings
 
 _session_factory: sessionmaker[Session] | None = None
 
@@ -40,3 +41,12 @@ def get_db() -> Iterator[Session]:
     """FastAPI dependency yielding a transactional session."""
     with session_scope(get_session_factory()) as session:
         yield session
+
+
+def get_github_client() -> GitHubClient:
+    """Build the GitHub metadata gateway (no I/O at construction).
+
+    Tests override this dependency with a mock-transport client; production
+    derives the remote only from the validated repository identity.
+    """
+    return github_client_from_settings(get_settings())

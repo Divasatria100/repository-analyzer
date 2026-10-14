@@ -44,9 +44,12 @@ from app.results.aggregation import (
 )
 from app.results.canonical import (
     SnapshotData,
+    analysis_section,
     build_canonical_result,
     comparison_to_dict,
+    repository_section,
     snapshot_view_from_data,
+    status_section,
 )
 from app.results.comparison import (
     ComparisonEntry,
@@ -95,8 +98,11 @@ __all__ = [
     "SnapshotView",
     "ComparisonEntry",
     "ComparisonResult",
+    "analysis_section",
     "build_canonical_result",
     "compare_snapshots",
     "comparison_to_dict",
+    "repository_section",
     "snapshot_view_from_data",
+    "status_section",
 ]

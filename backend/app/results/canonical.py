@@ -726,6 +726,93 @@ def _file_entry(
     }
 
 
+def analysis_section(analysis: Analysis) -> dict[str, object]:
+    """Canonical analysis metadata member (docs/13 §4) for one analysis row."""
+    return {
+        "analysis_id": analysis.id,
+        "repository_id": analysis.repository_id,
+        "timestamp": _iso(analysis.created_at),
+        "analyzer_version": analysis.analyzer_version,
+        "rule_set_version": analysis.rule_set_version,
+        "configuration": analysis.analysis_config,
+        "advisory_data": (
+            {
+                "source": analysis.advisory_source,
+                "consulted_at": _iso(analysis.advisory_consulted_at),
+                "outcome": _advisory_outcome(analysis.advisory_status),
+            }
+            if analysis.advisory_source
+            else None
+        ),
+    }
+
+
+def repository_section(analysis: Analysis, repository: Repository) -> dict[str, object]:
+    """Canonical repository member with analyzed state (docs/13 §5)."""
+    return {
+        "repository_id": repository.id,
+        "url": repository.normalized_url,
+        "owner": repository.owner,
+        "name": repository.name,
+        "analyzed_state": {
+            "branch": (
+                {"name": analysis.resolved_branch, "origin": _origin(analysis.branch_origin)}
+                if analysis.resolved_branch
+                else None
+            ),
+            "commit": (
+                {"sha": analysis.resolved_commit_sha, "origin": _origin(analysis.commit_origin)}
+                if analysis.resolved_commit_sha
+                else None
+            ),
+        },
+    }
+
+
+def status_section(
+    analysis: Analysis,
+    domains: list[DomainState],
+    limitations: list[Limitation],
+    sealed_at: datetime | None,
+) -> dict[str, object]:
+    """Canonical status member (docs/13 §6) from persisted rows.
+
+    ``sealed_at`` is None for analyses without a sealed snapshot; domain
+    entries are required only for completed outcomes (empty otherwise).
+    """
+    entries = [_limitation_entry(limitation) for limitation in limitations]
+    entries.sort(
+        key=lambda item: (
+            str(item["scope_kind"]),
+            str(item.get("area") or ""),
+            str(item.get("rule_id") or ""),
+            str(item.get("path") or ""),
+            str(item["reason"]),
+        )
+    )
+    return {
+        # Exactly one of stage/outcome is non-null (docs/13 §6.1): the
+        # stored stage keeps the last pipeline stage for operations while
+        # the canonical view reports null for a terminal analysis.
+        "stage": None if analysis.outcome is not None else analysis.stage,
+        "outcome": analysis.outcome,
+        "completed_at": _iso(analysis.completed_at),
+        "explanation": analysis.explanation,
+        "snapshot": {"sealed_at": _iso(sealed_at)} if sealed_at is not None else None,
+        "domains": [
+            {"area": domain.area, "state": domain.state, "reason": domain.reason}
+            for domain in sorted(
+                domains,
+                key=lambda item: (
+                    AREAS.index(item.area) if item.area in AREAS else len(AREAS),
+                    item.area,
+                ),
+            )
+        ],
+        "limitations": entries,
+    }
+
+
 def build_canonical_result(data: SnapshotData) -> dict[str, object]:
     """Build the canonical JSON-compatible result for one snapshot.
 
@@ -740,77 +827,17 @@ def build_canonical_result(data: SnapshotData) -> dict[str, object]:
         )
     if not isinstance(analysis.analysis_config, dict):
         raise ValueError("Canonical result requires the persisted configuration snapshot.")
-    advisory_entries = (
-        {
-            "source": analysis.advisory_source,
-            "consulted_at": _iso(analysis.advisory_consulted_at),
-            "outcome": _advisory_outcome(analysis.advisory_status),
-        }
-        if analysis.advisory_source
-        else None
-    )
     result: dict[str, object] = {
-        "analysis": {
-            "analysis_id": analysis.id,
-            "repository_id": analysis.repository_id,
-            "timestamp": _iso(analysis.created_at),
-            "analyzer_version": analysis.analyzer_version,
-            "rule_set_version": analysis.rule_set_version,
-            "configuration": analysis.analysis_config,
-            "advisory_data": advisory_entries,
-        },
-        "repository": {
-            "repository_id": data.repository.id,
-            "url": data.repository.normalized_url,
-            "owner": data.repository.owner,
-            "name": data.repository.name,
-            "analyzed_state": {
-                "branch": (
-                    {"name": analysis.resolved_branch, "origin": _origin(analysis.branch_origin)}
-                    if analysis.resolved_branch
-                    else None
-                ),
-                "commit": (
-                    {"sha": analysis.resolved_commit_sha, "origin": _origin(analysis.commit_origin)}
-                    if analysis.resolved_commit_sha
-                    else None
-                ),
-            },
-        },
+        "analysis": analysis_section(analysis),
+        "repository": repository_section(analysis, data.repository),
     }
     domain_by_area = {domain.area: domain for domain in data.domain_states}
     for area in AREAS:
         if area not in domain_by_area:
             raise ValueError(f"Missing domain state for area {area!r}.")
-    limitations = [_limitation_entry(limitation) for limitation in data.limitations]
-    limitations.sort(
-        key=lambda item: (
-            str(item["scope_kind"]),
-            str(item.get("area") or ""),
-            str(item.get("rule_id") or ""),
-            str(item.get("path") or ""),
-            str(item["reason"]),
-        )
+    result["status"] = status_section(
+        analysis, data.domain_states, data.limitations, data.snapshot.sealed_at
     )
-    result["status"] = {
-        # Exactly one of stage/outcome is non-null (docs/13 §6.1): the
-        # stored stage keeps the last pipeline stage for operations while
-        # the canonical view reports null for a terminal analysis.
-        "stage": None if analysis.outcome is not None else analysis.stage,
-        "outcome": analysis.outcome,
-        "completed_at": _iso(analysis.completed_at),
-        "explanation": analysis.explanation,
-        "snapshot": {"sealed_at": _iso(data.snapshot.sealed_at)},
-        "domains": [
-            {
-                "area": area,
-                "state": domain_by_area[area].state,
-                "reason": domain_by_area[area].reason,
-            }
-            for area in AREAS
-        ],
-        "limitations": limitations,
-    }
 
     findings_by_area: dict[str, list[Finding]] = {area: [] for area in AREAS}
     for finding in _sorted_findings(data.findings):

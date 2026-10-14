@@ -14,7 +14,10 @@ import logging
 from fastapi import FastAPI
 from pydantic import ValidationError
 
+from app.api.analyses import router as analyses_router
+from app.api.errors import install_error_handlers
 from app.api.health import router as health_router
+from app.api.repositories import router as repositories_router
 from app.core.config import Settings, format_validation_error, get_settings
 from app.core.logging import (
     configure_logging,
@@ -50,7 +53,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(title=active.application.name, version=active.application.version)
     application.state.settings = active
+    install_error_handlers(application)
     application.include_router(health_router, prefix=API_PREFIX)
+    application.include_router(analyses_router, prefix=API_PREFIX)
+    application.include_router(repositories_router, prefix=API_PREFIX)
 
     @application.get("/")
     def root() -> dict[str, str]:
