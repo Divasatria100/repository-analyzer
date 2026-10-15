@@ -123,7 +123,7 @@ export function NewAnalysisPage() {
       <Panel>
         <h2 className="mb-1 text-xl font-semibold">Analyze a public repository</h2>
         <p className="mb-6 text-sm text-text-secondary">
-          Static analysis only — RepoLens reads repository contents without running them.
+          Repository code is analyzed without being executed.
         </p>
         <form onSubmit={(event) => void handleSubmit(event)} noValidate>
           <div>

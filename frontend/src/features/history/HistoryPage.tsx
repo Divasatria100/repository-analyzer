@@ -72,9 +72,7 @@ export function HistoryPage() {
       <Panel>
         <h2 className="text-lg font-semibold">History</h2>
         <p className="mt-2 text-sm text-text-secondary">
-          Analysis history is listed per repository. Enter a repository ID to load its
-          analyses — you can copy it from any analysis Overview — or open history from
-          an analysis workspace.
+          View past analyses for a repository. Enter a repository ID or open History from an analysis workspace.
         </p>
         <form
           className="mt-4 flex max-w-xl flex-col gap-2 sm:flex-row"
