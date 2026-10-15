@@ -79,6 +79,24 @@ describe("Findings explorer", () => {
     });
   });
 
+  it("disables the order toggle for backend-fixed severity order", async () => {
+    const calls = mockFetchRoutes([{ match: "/findings", payload: PAGE }]);
+    renderAt("/analysis/abc123/findings");
+    await waitFor(() => {
+      expect(screen.getByText("SEC-HARDCODED-SECRET")).toBeDefined();
+    });
+    const toggle = screen.getByRole("button", { name: /Sort order/ });
+    expect(toggle).toBeDisabled();
+    expect(screen.getByText("Severity order is fixed by the backend.")).toBeDefined();
+    const before = calls.length;
+    fireEvent.click(toggle);
+    expect(calls.length).toBe(before);
+    fireEvent.change(screen.getByLabelText("Sort field"), { target: { value: "file" } });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Sort order/ })).not.toBeDisabled();
+    });
+  });
+
   it("paginates with server metadata", async () => {
     const calls = mockFetchRoutes([
       { match: "/findings", payload: { ...PAGE, total: 30 } },
@@ -92,6 +110,20 @@ describe("Findings explorer", () => {
     await waitFor(() => {
       expect(calls.some((url) => url.includes("page=2"))).toBe(true);
     });
+  });
+
+  it("does not size filtered pages from the unfiltered total", async () => {
+    mockFetchRoutes([{ match: "/findings", payload: { ...PAGE, total: 30 } }]);
+    renderAt("/analysis/abc123/findings?severity=High");
+    await waitFor(() => {
+      expect(screen.getByText("SEC-HARDCODED-SECRET")).toBeDefined();
+    });
+    // The label qualifies the contract total instead of claiming 2 pages of matches.
+    expect(
+      screen.getByText("Page 1 (of 30 unfiltered findings in analysis)"),
+    ).toBeDefined();
+    // Partial page under filters: no Next into a phantom page.
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
   });
 
   it("lets the latest request win filter races", async () => {

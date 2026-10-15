@@ -194,7 +194,7 @@ describe("Architecture page", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "app/a.py" })).toBeDefined();
     });
-    const fileLink = screen.getByRole("link", { name: "Findings in file" });
+    const fileLink = screen.getByRole("link", { name: "Search findings in file" });
     expect(fileLink.getAttribute("href")).toBe("/analysis/abc123/findings?q=app%2Fa.py");
   });
 

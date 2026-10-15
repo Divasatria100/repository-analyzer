@@ -113,7 +113,7 @@ export function ModuleDetail({
                 className="text-xs text-primary underline"
                 to={`${ROUTES.analysisFindings(analysisId)}?q=${encodeURIComponent(path)}`}
               >
-                Findings in file
+                Search findings in file
               </Link>
             </li>
           ))}

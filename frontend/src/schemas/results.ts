@@ -75,12 +75,10 @@ export type FindingsPage = z.infer<typeof findingsPageSchema>;
 
 // docs/17 §4.3 vocabularies (backend/app/api/analyses.py).
 export const FINDING_SORTS = ["severity", "confidence", "rule", "category", "file"] as const;
-export type FindingSort = (typeof FINDING_SORTS)[number];
 
 export const SEVERITIES = ["Critical", "High", "Medium", "Low", "Info"] as const;
 export const CONFIDENCES = ["High", "Medium", "Low"] as const;
 export const CATEGORIES = ["security", "architecture", "dependency", "code_structure"] as const;
-export type FindingCategory = (typeof CATEGORIES)[number];
 
 export interface FindingsQuery {
   category: string[];
@@ -140,8 +138,6 @@ const metricRecordSchema = z
   })
   .passthrough();
 
-export type MetricRecord = z.infer<typeof metricRecordSchema>;
-
 export const architectureDocSchema = z.object({
   granularity: z.string().nullable(),
   potentially_incomplete: z.boolean(),
@@ -158,7 +154,6 @@ export const architectureDocSchema = z.object({
 export type ArchitectureDoc = z.infer<typeof architectureDocSchema>;
 export type GraphNode = z.infer<typeof graphNodeSchema>;
 export type GraphEdge = z.infer<typeof graphEdgeSchema>;
-export type ArchCycle = z.infer<typeof cycleSchema>;
 
 // docs/13 §6–7 — status and summary slices for the Overview.
 const domainStateSchema = z.object({
@@ -189,8 +184,6 @@ export const analysisStatusSchema = z
   })
   .passthrough();
 
-export type AnalysisStatusBlock = z.infer<typeof analysisStatusSchema>;
-
 const areaFindingsBlockSchema = z.object({
   total: z.number(),
   by_severity: z.record(z.string(), z.number()),
@@ -213,8 +206,6 @@ export const analysisSummarySchema = z.record(z.string(), z.unknown()).and(
     code_structure: areaSummarySchema,
   }),
 );
-
-export type AnalysisSummary = z.infer<typeof analysisSummarySchema>;
 
 // Full §4.2 result for completed analyses. Sections are null when the area
 // is unavailable (docs/13 §3.3) — never an empty stand-in.

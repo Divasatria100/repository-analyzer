@@ -33,6 +33,35 @@ describe("Finding detail", () => {
     expect(screen.getByText("F-9999")).toBeDefined();
   });
 
+  it("shows the backend failure for failed analyses instead of unknown-finding", async () => {
+    const result = analysisResultFixture({
+      status: {
+        stage: null,
+        outcome: "Failed",
+        explanation: "Retrieval failed.",
+        domains: [],
+        limitations: [],
+      },
+      summary: null,
+      security: null,
+      architecture: null,
+      dependencies: null,
+      code_structure: null,
+    } as never);
+    mockFetchRoutes([{ match: "/api/analyses/abc123", payload: result }]);
+    renderAt("/analysis/abc123/findings/F-0001");
+    await waitFor(() => {
+      expect(
+        screen.getByText("Finding detail is unavailable: the analysis failed."),
+      ).toBeDefined();
+    });
+    expect(screen.getByText("Retrieval failed.")).toBeDefined();
+    expect(screen.queryByText("Finding not found.")).toBeNull();
+    expect(screen.getByRole("link", { name: "View progress" }).getAttribute("href")).toBe(
+      "/analysis/abc123",
+    );
+  });
+
   it("renders HTML-like evidence as inert text", async () => {
     const evil = findingFixture({
       finding_id: "F-0007",

@@ -122,6 +122,16 @@ export function FindingsExplorer({
   });
 
   const fromSearch = searchParams.toString();
+  // The contract `total` is the UNFILTERED analysis count, so it cannot
+  // size filtered pages. With filters active, "more pages" is inferred
+  // only from a full page; an exact-multiple tail may still land on an
+  // empty page, which renders as an empty (not failed) result.
+  const hasActiveFilters =
+    query.category.length > 0 ||
+    query.severity.length > 0 ||
+    query.confidence.length > 0 ||
+    query.rule_id.length > 0 ||
+    query.q.trim() !== "";
 
   return (
     <div className="space-y-4">
@@ -240,11 +250,22 @@ export function FindingsExplorer({
           <button
             type="button"
             onClick={() => update({ order: query.order === "asc" ? "desc" : "asc", page: 1 })}
-            className="rounded-control border border-border px-2 py-1 text-sm hover:border-primary"
+            disabled={query.sort === "severity"}
+            title={
+              query.sort === "severity"
+                ? "Severity order is fixed by the backend (Critical → Info)"
+                : undefined
+            }
+            className="rounded-control border border-border px-2 py-1 text-sm hover:border-primary disabled:cursor-not-allowed disabled:opacity-40"
             aria-label={`Sort order ${query.order}, activate to switch`}
           >
             {query.order === "asc" ? "↑ asc" : "↓ desc"}
           </button>
+          {query.sort === "severity" ? (
+            <span className="text-xs text-text-secondary">
+              Severity order is fixed by the backend.
+            </span>
+          ) : null}
           <label className="text-sm">
             Per page{" "}
             <select
@@ -396,11 +417,17 @@ export function FindingsExplorer({
               Previous
             </button>
             <span aria-live="polite">
-              {`Page ${data.page} of ${Math.max(1, Math.ceil(data.total / data.page_size))}`}
+              {hasActiveFilters
+                ? `Page ${data.page} (of ${data.total} unfiltered findings in analysis)`
+                : `Page ${data.page} of ${Math.max(1, Math.ceil(data.total / data.page_size))}`}
             </span>
             <button
               type="button"
-              disabled={data.page * data.page_size >= data.total}
+              disabled={
+                hasActiveFilters
+                  ? data.items.length < data.page_size
+                  : data.page * data.page_size >= data.total
+              }
               onClick={() => update({ page: data.page + 1 })}
               className="rounded-control border border-border px-3 py-1 hover:border-primary disabled:opacity-40"
             >

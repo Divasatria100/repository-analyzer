@@ -61,7 +61,7 @@ function toFlowEdges(edges: GraphEdge[], renderedIds: Set<string>, selectedId: s
     });
 }
 
-class GraphErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+export class GraphErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   constructor(properties: { children: ReactNode }) {
     super(properties);
     this.state = { failed: false };

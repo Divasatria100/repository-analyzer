@@ -40,11 +40,6 @@ export function areaLabel(area: string): string {
   return AREA_LABELS[area] ?? area;
 }
 
-/** First location is the display location (serialized contract has no primary flag). */
-export function displayPath(paths: Array<{ path: string }>): string | null {
-  return paths.length > 0 ? paths[0].path : null;
-}
-
 export function formatLineRange(
   start: number | null | undefined,
   end: number | null | undefined,

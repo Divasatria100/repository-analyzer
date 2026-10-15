@@ -91,6 +91,33 @@ export function FindingDetailPage() {
     );
   }
 
+  const { status } = data;
+  const { outcome } = status;
+
+  if (outcome === "Failed") {
+    return (
+      <Panel>
+        <Alert tone="error" title="Finding detail is unavailable: the analysis failed.">
+          <p>{status.explanation ?? "The analysis did not produce usable results."}</p>
+        </Alert>
+        <div className="mt-4 flex gap-3">
+          <Link
+            to={ROUTES.analysisDetail(analysisId)}
+            className="rounded-control border border-border px-4 py-2 text-sm font-medium hover:border-primary"
+          >
+            View progress
+          </Link>
+          <Link
+            to={backTarget}
+            className="rounded-control border border-border px-4 py-2 text-sm font-medium hover:border-primary"
+          >
+            Back to findings
+          </Link>
+        </div>
+      </Panel>
+    );
+  }
+
   const resolved = resolveFinding(data as unknown as Record<string, unknown>, findingId);
   if (!resolved) {
     return (
