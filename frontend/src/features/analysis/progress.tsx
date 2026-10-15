@@ -47,7 +47,9 @@ export function useAnalysisStatus(analysisId: string, enabled: boolean) {
     startedAtRef.current = Date.now();
   }
   return useQuery({
-    queryKey: ["analysis", analysisId],
+    // Dedicated key: the status payload is a different shape from the full
+    // canonical result and must never be served to result pages from cache.
+    queryKey: ["analysis-status", analysisId],
     queryFn: () => getAnalysis(analysisId),
     enabled,
     // Bounded polling: only while non-terminal and within budget.

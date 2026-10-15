@@ -2,13 +2,14 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { ROUTES } from "../router/routes";
 import { EmptyState, Panel } from "../components/ui";
+import { clearRecentRepositoryId, getRecentRepositoryId } from "../lib/recentRepository";
+import { RecentAnalyses } from "../features/dashboard/RecentAnalyses";
 
-// Dashboard entry point (docs/14-ui-requirements.md, Section 6).
-// First viewport only: headline, scope note, primary action. The inline URL
-// input submits into the New Analysis flow (the value travels as a query
-// parameter and pre-fills the form there). The recent analyses table belongs
-// to a later phase (no per-dashboard listing endpoint exists in the API
-// contract), so nothing here fabricates analyses or stats.
+// Dashboard entry point (docs/14-ui-requirements.md, Section 6; TASK-208/209).
+// First viewport: headline, scope note, primary action. The inline URL input
+// submits into the New Analysis flow. Recent Analyses shows the history of
+// one repository — the API lists history per repository only, so the scope
+// is always labeled and no global counts are fabricated.
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -57,19 +58,40 @@ export function DashboardPage() {
         </p>
       </section>
       <Panel title="Recent Analyses" labelledBy="recent-analyses">
-        <div id="recent-analyses" className="sr-only">
-          Recent Analyses
-        </div>
-        <EmptyState title="No recent analyses to show yet.">
-          <p>
-            Start with{" "}
-            <Link className="text-primary underline" to={ROUTES.analysisNew}>
-              New Analysis
-            </Link>
-            .
-          </p>
-        </EmptyState>
+        <DashboardRecents />
       </Panel>
+    </div>
+  );
+}
+
+function DashboardRecents() {
+  const [repositoryId, setRepositoryId] = useState<string | null>(() => getRecentRepositoryId());
+  if (!repositoryId) {
+    return (
+      <EmptyState title="No recent analyses to show yet.">
+        <p>
+          Analyses you submit will appear here. Start with{" "}
+          <Link className="text-primary underline" to={ROUTES.analysisNew}>
+            New Analysis
+          </Link>
+          .
+        </p>
+      </EmptyState>
+    );
+  }
+  return (
+    <div>
+      <RecentAnalyses repositoryId={repositoryId} />
+      <button
+        type="button"
+        onClick={() => {
+          clearRecentRepositoryId();
+          setRepositoryId(null);
+        }}
+        className="mt-3 text-xs text-text-secondary underline hover:text-text-primary"
+      >
+        Forget this repository
+      </button>
     </div>
   );
 }

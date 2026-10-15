@@ -42,6 +42,23 @@ body {
   outline-offset: 2px;
 }
 
+/* Interface density (docs/14-ui-requirements.md, Sections 3.6 and 5.1):
+   Comfortable targets 40px data-table rows, Compact targets 32px.
+   Applied as a minimum row height so multiline content can still grow and
+   interactive targets are never squeezed. Scope: data tables only. */
+:root,
+:root[data-density="comfortable"] {
+  --rl-row-h: 40px;
+}
+
+:root[data-density="compact"] {
+  --rl-row-h: 32px;
+}
+
+main table tbody tr {
+  height: var(--rl-row-h, 40px);
+}
+
 /* Long identifiers (URLs, SHAs, branch names) wrap instead of overflowing. */
 .break-identifier {
   overflow-wrap: anywhere;

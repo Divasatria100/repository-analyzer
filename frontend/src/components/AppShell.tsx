@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { ROUTES } from "../router/routes";
+import { usePreferencesStore } from "../stores/usePreferencesStore";
 
 // Application shell (docs/14-ui-requirements.md, Section 4):
 // persistent sidebar on desktop, navigation drawer on narrow screens,
@@ -35,13 +36,20 @@ export function AppShell() {
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const sidebarLabelId = useId();
   const drawerLabelId = useId();
   const pageTitle = titleFor(location.pathname);
+  const density = usePreferencesStore((state) => state.density);
 
   useEffect(() => {
     document.title = `${pageTitle} · RepoLens`;
   }, [pageTitle]);
+
+  // Density preference drives table row heights via CSS (docs/14 §5.1).
+  useEffect(() => {
+    document.documentElement.dataset.density = density;
+  }, [density]);
 
   // Close the drawer on navigation and return focus to the menu button.
   useEffect(() => {
@@ -52,6 +60,19 @@ export function AppShell() {
       return false;
     });
   }, [location.pathname]);
+
+  // After navigation, if focus was lost with the unmounted page (active
+  // element fell back to body), move it to the page heading so keyboard
+  // and screen-reader users land somewhere sensible. Pages that manage
+  // their own initial focus (e.g. autofocus inputs) are left alone.
+  useEffect(() => {
+    if (
+      !drawerOpen &&
+      (document.activeElement === document.body || document.activeElement === null)
+    ) {
+      headingRef.current?.focus({ preventScroll: true });
+    }
+  }, [location.pathname, drawerOpen]);
 
   // Escape closes the drawer.
   useEffect(() => {
@@ -99,6 +120,12 @@ function PrimaryNav({ labelId }: { labelId: string }) {
 
   return (
     <div className="flex min-h-screen bg-background text-text-primary">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-control focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-background"
+      >
+        Skip to main content
+      </a>
       {/* Desktop sidebar (docs/14 §4.2: exactly the four entries). */}
       <aside className="hidden w-60 shrink-0 border-r border-border bg-secondary p-4 md:block">
         <p className="mb-6 px-3 text-lg font-bold tracking-tight">RepoLens</p>
@@ -142,9 +169,9 @@ function PrimaryNav({ labelId }: { labelId: string }) {
           >
             Menu
           </button>
-          <h1 className="min-w-0 truncate text-base font-semibold">{pageTitle}</h1>
+          <h1 ref={headingRef} tabIndex={-1} className="min-w-0 truncate text-base font-semibold outline-none">{pageTitle}</h1>
         </header>
-        <main className="mx-auto w-full max-w-[1200px] flex-1 px-4 py-6 md:px-6">
+        <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-[1200px] flex-1 px-4 py-6 outline-none md:px-6">
           <Outlet />
         </main>
       </div>

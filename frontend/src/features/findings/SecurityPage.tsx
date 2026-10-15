@@ -12,7 +12,7 @@ import { FindingsExplorer } from "./FindingsExplorer";
 export function SecurityPage() {
   const params = useParams();
   const analysisId = params[ANALYSIS_ID_PARAM] ?? "";
-  const { data, error, isLoading } = useAnalysisResult(analysisId);
+  const { data, error, isLoading, refetch, isFetching } = useAnalysisResult(analysisId);
 
   if (isLoading) {
     return <LoadingState label="Loading security findings…" />;
@@ -24,6 +24,14 @@ export function SecurityPage() {
         <Alert tone="error" title="Could not load security findings.">
           <p>Try refreshing, or return to the analysis status.</p>
         </Alert>
+        <button
+          type="button"
+          onClick={() => void refetch()}
+          disabled={isFetching}
+          className="mt-4 rounded-control border border-border px-4 py-2 text-sm font-medium hover:border-primary disabled:opacity-50"
+        >
+          {isFetching ? "Retrying…" : "Retry"}
+        </button>
       </Panel>
     );
   }

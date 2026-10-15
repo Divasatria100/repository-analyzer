@@ -40,17 +40,6 @@ export function AnalysisStatusPage() {
   return <AnalysisProgress analysisId={analysisId} />;
 }
 
-export function SettingsPage() {
-  return (
-    <Panel>
-      <h2 className="text-lg font-semibold">Settings</h2>
-      <EmptyState title="Settings are not implemented yet.">
-        <p>The interface-density preference arrives in a later phase.</p>
-      </EmptyState>
-    </Panel>
-  );
-}
-
 export function NotFoundPage() {
   return (
     <Panel>

@@ -11,20 +11,20 @@ import { SecurityPage } from "../features/findings/SecurityPage";
 import { HistoryPage } from "../features/history/HistoryPage";
 import { OverviewPage } from "../features/overview/OverviewPage";
 import { ReportPage } from "../features/report/ReportPage";
+import { SettingsPage } from "../features/settings/SettingsPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { NewAnalysisPage } from "../pages/NewAnalysisPage";
 import {
   AnalysisStatusPage,
   NotFoundPage,
-  SettingsPage,
 } from "../pages/PlaceholderPages";
 import { AnalysisLayout } from "./AnalysisLayout";
 import { ANALYSIS_ID_PARAM, FINDING_ID_PARAM, ROUTES } from "./routes";
 
 // Route architecture per docs/14-ui-requirements.md (Sections 4–5).
-// Every page renders inside the shared AppShell. Overview, Findings,
-// Security, Finding Detail, and Architecture are implemented (TASK-189–198);
-// Dependencies, Code Structure, and Files keep honest placeholders.
+// Every page renders inside the shared AppShell. All analysis workspace
+// views, history, comparison, report, dashboard, and settings are
+// implemented; only Settings holds a placeholder-free single preference.
 // Exported as data so tests can build a memory router from the same tree.
 export const routes: RouteObject[] = [
   {

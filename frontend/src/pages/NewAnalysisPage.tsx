@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { ApiRequestError, postAnalysis } from "../lib/api";
+import { setRecentRepositoryId } from "../lib/recentRepository";
 import { URL_PLACEHOLDER, checkBranchName, checkCommitRef, checkRepositoryUrl } from "../lib/validation";
 import { ROUTES } from "../router/routes";
 import { Alert, FieldError, Panel } from "../components/ui";
@@ -90,6 +91,8 @@ export function NewAnalysisPage() {
       });
       // HTTP 202: accepted, not completed. The progress view shows the
       // actual returned stage; nothing here claims execution has started.
+      // Remember the repository so the Dashboard can offer it back.
+      setRecentRepositoryId(accepted.repository_id);
       navigate(ROUTES.analysisDetail(accepted.analysis_id));
     } catch (error) {
       // Inputs are preserved for correction; only the error is shown.

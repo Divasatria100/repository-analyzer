@@ -1,4 +1,4 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { renderAt } from "../test/render";
 
@@ -39,5 +39,39 @@ describe("application shell", () => {
     fireEvent.click(screen.getAllByRole("link", { name: "Settings" })[0]);
     expect(screen.queryByRole("dialog", { name: "Primary navigation" })).toBeNull();
     expect(screen.getAllByRole("heading", { name: "Settings" }).length).toBeGreaterThan(0);
+  });
+
+  it("offers a skip link targeting focusable main content", () => {
+    renderAt("/dashboard");
+    const skip = screen.getByRole("link", { name: "Skip to main content" });
+    expect(skip.getAttribute("href")).toBe("#main-content");
+    const main = document.getElementById("main-content");
+    expect(main).not.toBeNull();
+    expect(main?.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("moves focus to the page heading when navigation drops focus", async () => {
+    const router = renderAt("/dashboard");
+    // Simulate focus lost with the unmounted page, then navigate.
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    expect(document.activeElement).toBe(document.body);
+    await router.navigate("/history");
+    await waitFor(() => {
+      const headings = screen.getAllByRole("heading", { name: "History" });
+      expect(document.activeElement).toBe(headings[0]);
+    });
+  });
+
+  it("applies the density preference to the document", async () => {
+    const { usePreferencesStore } = await import("../stores/usePreferencesStore");
+    renderAt("/dashboard");
+    await waitFor(() => {
+      expect(document.documentElement.dataset.density).toBe("comfortable");
+    });
+    usePreferencesStore.getState().setDensity("compact");
+    await waitFor(() => {
+      expect(document.documentElement.dataset.density).toBe("compact");
+    });
+    usePreferencesStore.getState().setDensity("comfortable");
   });
 });

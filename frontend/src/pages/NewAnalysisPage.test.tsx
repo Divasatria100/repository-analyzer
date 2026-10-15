@@ -21,6 +21,7 @@ function submit() {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  window.localStorage.clear();
 });
 
 describe("New Analysis form", () => {
@@ -60,6 +61,8 @@ describe("New Analysis form", () => {
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/analysis/abc123");
     });
+    // The dashboard offers the repository back from this stored id.
+    expect(window.localStorage.getItem("repolens-dashboard-repository")).toBe("r1");
   });
 
   it("sends null branch/commit when left empty", async () => {
