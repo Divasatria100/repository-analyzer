@@ -22,10 +22,10 @@ export function DashboardPage() {
   }
   return (
     <div className="space-y-6">
-      <section className="py-10">
-        <h2 className="max-w-3xl text-3xl font-bold tracking-tight">
-          RepoLens analyzes public GitHub repositories for security, architecture,
-          dependencies, and code structure.
+      <section className="py-20">
+        <p className="t-label mb-4 text-primary">Static repository analysis</p>
+        <h2 className="t-display max-w-3xl text-[40px] md:text-[64px]">
+          Understand Your Codebase
         </h2>
         <p className="mt-2 text-sm text-text-secondary">
           Public GitHub repositories · static analysis

@@ -128,7 +128,10 @@ function PrimaryNav({ labelId }: { labelId: string }) {
       </a>
       {/* Desktop sidebar (docs/14 §4.2: exactly the four entries). */}
       <aside className="hidden w-60 shrink-0 border-r border-border bg-secondary p-4 md:block">
-        <p className="mb-6 px-3 text-lg font-bold tracking-tight">RepoLens</p>
+        <p className="mb-6 flex items-center gap-2 px-3 text-lg font-bold tracking-tight">
+          <span aria-hidden="true" className="inline-block h-2.5 w-2.5 rounded-[3px] bg-primary" />
+          RepoLens
+        </p>
         <PrimaryNav labelId={sidebarLabelId} />
       </aside>
 
@@ -143,7 +146,10 @@ function PrimaryNav({ labelId }: { labelId: string }) {
           />
           <div className="absolute inset-y-0 left-0 w-64 overflow-y-auto bg-secondary p-4">
             <div className="mb-6 flex items-center justify-between px-3">
-              <p className="text-lg font-bold tracking-tight">RepoLens</p>
+              <p className="flex items-center gap-2 text-lg font-bold tracking-tight">
+                <span aria-hidden="true" className="inline-block h-2.5 w-2.5 rounded-[3px] bg-primary" />
+                RepoLens
+              </p>
               <button
                 type="button"
                 onClick={() => setDrawerOpen(false)}

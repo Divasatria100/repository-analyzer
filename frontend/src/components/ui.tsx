@@ -16,7 +16,7 @@ export function Panel({
   return (
     <section
       aria-labelledby={labelledBy}
-      className="rounded-panel border border-border bg-surface p-6"
+      className="rounded-panel border border-border bg-surface p-6 shadow-panel"
     >
       {title ? (
         <h2 id={labelledBy} className="mb-4 text-lg font-semibold text-text-primary">
