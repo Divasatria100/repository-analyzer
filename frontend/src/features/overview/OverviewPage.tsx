@@ -107,6 +107,17 @@ export function OverviewPage() {
           </h2>
           <OutcomeBadge outcome={outcome} />
         </div>
+        <div className="mt-3 flex flex-wrap gap-3 text-sm">
+          <Link className="text-primary underline" to={ROUTES.analysisReport(analysisId)}>
+            View report
+          </Link>
+          <Link
+            className="text-primary underline"
+            to={`${ROUTES.history}?repository=${encodeURIComponent(analysis.repository_id)}`}
+          >
+            Analysis history
+          </Link>
+        </div>
         <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-text-secondary">Analysis ID</dt>

@@ -15,6 +15,8 @@ export const ROUTES = {
   analysisFindings: (analysisId: string) => `/analysis/${analysisId}/findings`,
   analysisFindingDetail: (analysisId: string, findingId: string) =>
     `/analysis/${analysisId}/findings/${findingId}`,
+  analysisComparison: (analysisId: string) => `/analysis/${analysisId}/comparison`,
+  analysisReport: (analysisId: string) => `/analysis/${analysisId}/report`,
   history: "/history",
   settings: "/settings",
 } as const;

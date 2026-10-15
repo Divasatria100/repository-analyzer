@@ -12,9 +12,11 @@ import {
   type ArchitectureDoc,
   type FindingsPage,
   type FindingsQuery,
+  type RepositoryHistory,
   analysisResultSchema,
   architectureDocSchema,
   findingsPageSchema,
+  repositoryHistorySchema,
 } from "../schemas/results";
 
 // Transport layer for the analyses API (docs/17-api-contract.md).
@@ -126,9 +128,14 @@ export async function getAnalysis(analysisId: string): Promise<AnalysisDetail> {
 export async function getAnalysisResult(
   analysisId: string,
   signal?: AbortSignal,
+  comparisonBase?: string,
 ): Promise<AnalysisResult> {
+  const suffix =
+    comparisonBase != null && comparisonBase !== ""
+      ? `?comparison_base=${encodeURIComponent(comparisonBase)}`
+      : "";
   return request(
-    `/api/analyses/${encodeURIComponent(analysisId)}`,
+    `/api/analyses/${encodeURIComponent(analysisId)}${suffix}`,
     { method: "GET", signal },
     (payload) => analysisResultSchema.parse(payload),
   );
@@ -178,4 +185,87 @@ export async function getArchitecture(
     { method: "GET", signal },
     (payload) => architectureDocSchema.parse(payload),
   );
+}
+
+/** GET /api/repositories/{id} — repository identity plus analysis history (§4.5). */
+export async function getRepositoryHistory(
+  repositoryId: string,
+  signal?: AbortSignal,
+): Promise<RepositoryHistory> {
+  return request(
+    `/api/repositories/${encodeURIComponent(repositoryId)}`,
+    { method: "GET", signal },
+    (payload) => repositoryHistorySchema.parse(payload),
+  );
+}
+
+export const REPORT_FORMATS = ["json", "markdown", "html"] as const;
+export type ReportFormat = (typeof REPORT_FORMATS)[number];
+
+export const REPORT_CONTENT_TYPES: Record<ReportFormat, string> = {
+  json: "application/json",
+  markdown: "text/markdown",
+  html: "text/html",
+};
+
+export const REPORT_FILE_EXTENSIONS: Record<ReportFormat, string> = {
+  json: "json",
+  markdown: "md",
+  html: "html",
+};
+
+export interface ReportBlob {
+  format: ReportFormat;
+  contentType: string;
+  text: string;
+}
+
+/** GET /api/analyses/{id}/report — raw server bytes for view/export (§4.6).
+ *
+ * Returns text for every format (JSON included) so the caller downloads
+ * exactly what the server sealed. Non-2xx responses raise ApiRequestError
+ * and must never be saved as reports.
+ */
+export async function fetchReport(
+  analysisId: string,
+  format: ReportFormat,
+  signal?: AbortSignal,
+): Promise<ReportBlob> {
+  let response: Response;
+  try {
+    response = await fetch(
+      joinUrl(`/api/analyses/${encodeURIComponent(analysisId)}/report?format=${format}`),
+      { method: "GET", signal, cache: "no-store" },
+    );
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error;
+    }
+    throw new ApiRequestError(
+      "NETWORK_ERROR",
+      "Could not reach the backend. Check that it is running and try again.",
+    );
+  }
+  const text = await response.text();
+  if (!response.ok) {
+    let payload: unknown = null;
+    try {
+      payload = text ? (JSON.parse(text) as unknown) : null;
+    } catch {
+      payload = null;
+    }
+    throw (
+      contractError(payload, response.status) ??
+      new ApiRequestError(
+        "UNKNOWN_ERROR",
+        `The request failed (HTTP ${response.status}). Try again.`,
+        response.status,
+      )
+    );
+  }
+  return {
+    format,
+    contentType: response.headers.get("content-type") ?? REPORT_CONTENT_TYPES[format],
+    text,
+  };
 }

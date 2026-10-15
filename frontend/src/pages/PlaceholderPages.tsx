@@ -40,17 +40,6 @@ export function AnalysisStatusPage() {
   return <AnalysisProgress analysisId={analysisId} />;
 }
 
-export function HistoryPage() {
-  return (
-    <Panel>
-      <h2 className="text-lg font-semibold">History</h2>
-      <EmptyState title="Analysis history is not implemented yet.">
-        <p>Per-repository history arrives in a later phase.</p>
-      </EmptyState>
-    </Panel>
-  );
-}
-
 export function SettingsPage() {
   return (
     <Panel>

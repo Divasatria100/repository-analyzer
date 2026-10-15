@@ -41,9 +41,6 @@ afterEach(() => {
 
 describe.each([
   ["/analysis/new", "Analyze a public repository"],
-  ["/analysis/abc123/dependencies", "Dependencies"],
-  ["/analysis/abc123/code-structure", "Code Structure"],
-  ["/analysis/abc123/files", "Files"],
   ["/history", "History"],
   ["/settings", "Settings"],
 ])("route %s", (path, title) => {
@@ -96,6 +93,38 @@ describe("implemented workspace routes", () => {
     renderAt("/analysis/abc123/findings/F-0001");
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "SEC-HARDCODED-SECRET" })).toBeDefined();
+    });
+  });
+
+  it("renders the Dependencies view", async () => {
+    mockWorkspaceFetch();
+    renderAt("/analysis/abc123/dependencies");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Dependencies" })).toBeDefined();
+    });
+  });
+
+  it("renders the Code Structure view", async () => {
+    mockWorkspaceFetch();
+    renderAt("/analysis/abc123/code-structure");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Code Structure" })).toBeDefined();
+    });
+  });
+
+  it("renders the Files explorer", async () => {
+    mockWorkspaceFetch();
+    renderAt("/analysis/abc123/files");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Files" })).toBeDefined();
+    });
+  });
+
+  it("renders the Report view", async () => {
+    mockWorkspaceFetch();
+    renderAt("/analysis/abc123/report");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Report" })).toBeDefined();
     });
   });
 });

@@ -1,17 +1,21 @@
 import { createBrowserRouter, type RouteObject } from "react-router";
 import { AppShell } from "../components/AppShell";
 import { ArchitecturePage } from "../features/architecture/ArchitecturePage";
+import { CodeStructurePage } from "../features/codestructure/CodeStructurePage";
+import { ComparisonPage } from "../features/comparison/ComparisonPage";
+import { DependenciesPage } from "../features/dependencies/DependenciesPage";
+import { FilesPage } from "../features/files/FilesPage";
 import { FindingDetailPage } from "../features/findings/FindingDetailPage";
 import { FindingsPage } from "../features/findings/FindingsPage";
 import { SecurityPage } from "../features/findings/SecurityPage";
+import { HistoryPage } from "../features/history/HistoryPage";
 import { OverviewPage } from "../features/overview/OverviewPage";
+import { ReportPage } from "../features/report/ReportPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { NewAnalysisPage } from "../pages/NewAnalysisPage";
 import {
   AnalysisStatusPage,
-  HistoryPage,
   NotFoundPage,
-  SectionPlaceholder,
   SettingsPage,
 } from "../pages/PlaceholderPages";
 import { AnalysisLayout } from "./AnalysisLayout";
@@ -60,15 +64,15 @@ export const routes: RouteObject[] = [
           },
           {
             path: "dependencies",
-            element: <SectionPlaceholder title="Dependencies" />,
+            element: <DependenciesPage />,
           },
           {
             path: "code-structure",
-            element: <SectionPlaceholder title="Code Structure" />,
+            element: <CodeStructurePage />,
           },
           {
             path: "files",
-            element: <SectionPlaceholder title="Files" />,
+            element: <FilesPage />,
           },
           {
             path: "findings",
@@ -77,6 +81,14 @@ export const routes: RouteObject[] = [
           {
             path: `findings/:${FINDING_ID_PARAM}`,
             element: <FindingDetailPage />,
+          },
+          {
+            path: "comparison",
+            element: <ComparisonPage />,
+          },
+          {
+            path: "report",
+            element: <ReportPage />,
           },
         ],
       },

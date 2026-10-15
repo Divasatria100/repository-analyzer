@@ -93,7 +93,7 @@ export interface FindingsQuery {
 }
 
 // docs/17 §4.4 — bounded architecture document.
-const graphNodeSchema = z
+export const graphNodeSchema = z
   .object({
     node_id: z.string(),
     name: z.string(),
@@ -120,14 +120,14 @@ const graphEdgeSchema = z
   })
   .passthrough();
 
-const cycleSchema = z.object({
+export const cycleSchema = z.object({
   finding_id: z.string(),
   node_ids: z.array(z.string()),
 });
 
 // Canonical metric record (backend/app/results/canonical.py::_metric_record).
 // `value` is absent when unavailable — never zero-filled by the frontend.
-const metricRecordSchema = z
+export const metricRecordSchema = z
   .object({
     metric: z.string(),
     subject_path: z.string(),
@@ -137,6 +137,175 @@ const metricRecordSchema = z
     potentially_incomplete: z.boolean().optional(),
   })
   .passthrough();
+
+export type MetricRecord = z.infer<typeof metricRecordSchema>;
+
+// Canonical dependency item (backend/app/results/canonical.py::_dependency_items,
+// docs/13 §11). Identity is the occurrence id: one package with different
+// versions is several items. Never merge items by display name.
+export const dependencyItemSchema = z
+  .object({
+    dependency_id: z.string(),
+    name: z.string(),
+    version: z.string().nullable(),
+    ecosystem: z.string().nullable().optional(),
+    classification: z.string(),
+    source_manifest: z.string().nullable().optional(),
+    introduced_by: z.array(z.string()),
+    advisories: z.array(
+      z.object({ advisory_id: z.string(), source: z.string() }).passthrough(),
+    ),
+    finding_ids: z.array(z.string()),
+  })
+  .passthrough();
+
+export type DependencyItem = z.infer<typeof dependencyItemSchema>;
+
+export const dependenciesSectionSchema = z
+  .object({
+    rule_evaluations: z.array(z.unknown()),
+    items: z.array(dependencyItemSchema),
+    findings: z.array(findingSchema),
+  })
+  .passthrough()
+  .nullable();
+
+export const codeStructureSectionSchema = z
+  .object({
+    rule_evaluations: z.array(z.unknown()),
+    metric_definitions: z.record(
+      z.string(),
+      z
+        .object({
+          description: z.string(),
+          interpretation: z.string(),
+          unit: z.string(),
+        })
+        .passthrough(),
+    ),
+    metrics: z.array(metricRecordSchema),
+    findings: z.array(findingSchema),
+  })
+  .passthrough()
+  .nullable();
+
+export type CodeStructureSection = z.infer<typeof codeStructureSectionSchema>;
+
+// Canonical file record (backend/app/results/canonical.py::_file_entry,
+// docs/13 §13). The tree, filters, and detail render only these fields.
+export const fileRecordSchema = z
+  .object({
+    path: z.string(),
+    file_type: z.string(),
+    language: z.string().nullable(),
+    support: z.string(),
+    size: z.number().nullable().optional(),
+    binary: z.boolean().nullable().optional(),
+    generated: z.boolean().nullable().optional(),
+    exclusion: z.object({ status: z.string(), reason: z.string().nullable() }).nullable(),
+    eligibility: z.object({
+      classification: z.string(),
+      reason: z.string().nullable(),
+    }),
+    parse_result: z.string().nullable(),
+    diagnostics: z.array(
+      z.object({
+        code: z.unknown(),
+        message: z.unknown(),
+        line: z.unknown(),
+        column: z.unknown(),
+      }),
+    ),
+    indexing_limitation: z.string().nullable().optional(),
+    coverage: z.array(
+      z.object({
+        scope: z.object({ kind: z.string(), value: z.string() }),
+        state: z.string(),
+        reason: z.string().nullable().optional(),
+      }),
+    ),
+    finding_count: z.number(),
+  })
+  .passthrough();
+
+export type FileRecord = z.infer<typeof fileRecordSchema>;
+
+// Canonical comparison (backend/app/results/canonical.py::comparison_to_dict,
+// docs/13 §15). Findings match by identity key only; `qualified` marks
+// resolved entries whose scope was not evaluated in the target.
+const comparisonEntrySchema = z
+  .object({
+    identity_key: z.string(),
+    rule_id: z.string(),
+    category: z.string(),
+    base_finding_id: z.string().nullable().optional(),
+    target_finding_id: z.string().nullable().optional(),
+    qualified: z.boolean().optional(),
+  })
+  .passthrough();
+
+export const comparisonSchema = z.union([
+  z.object({ comparable: z.literal(false), reason: z.string() }).passthrough(),
+  z
+    .object({
+      comparable: z.literal(true),
+      base: z
+        .object({
+          commit_sha: z.string().nullable(),
+          timestamp: z.string().nullable(),
+          analyzer_version: z.string(),
+          rule_set_version: z.string(),
+        })
+        .passthrough(),
+      target: z
+        .object({
+          commit_sha: z.string().nullable(),
+          timestamp: z.string().nullable(),
+          analyzer_version: z.string(),
+          rule_set_version: z.string(),
+        })
+        .passthrough(),
+      context_differences: z.record(z.string(), z.boolean()),
+      qualifications: z.array(z.unknown()),
+      new: z.array(comparisonEntrySchema),
+      resolved: z.array(comparisonEntrySchema),
+      unchanged: z.array(comparisonEntrySchema),
+    })
+    .passthrough(),
+]);
+
+export type Comparison = z.infer<typeof comparisonSchema>;
+export type ComparisonEntry = z.infer<typeof comparisonEntrySchema>;
+
+// Repository history (backend/app/api/repositories.py, docs/17 §4.5).
+// Most-recent-first; same-commit analyses coexist as separate entries.
+// Entries carry no finding totals — the UI shows "—", never 0.
+export const historyEntrySchema = z
+  .object({
+    analysis_id: z.string(),
+    branch: z.object({ name: z.string(), origin: z.string() }).nullable(),
+    commit: z.object({ sha: z.string(), origin: z.string() }).nullable(),
+    timestamp: z.string().nullable(),
+    analyzer_version: z.string().nullable().optional(),
+    rule_set_version: z.string().nullable().optional(),
+    outcome: z.string().nullable(),
+    explanation: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+export type HistoryEntry = z.infer<typeof historyEntrySchema>;
+
+export const repositoryHistorySchema = z
+  .object({
+    repository_id: z.string(),
+    url: z.string(),
+    owner: z.string(),
+    name: z.string(),
+    analyses: z.array(historyEntrySchema),
+  })
+  .passthrough();
+
+export type RepositoryHistory = z.infer<typeof repositoryHistorySchema>;
 
 export const architectureDocSchema = z.object({
   granularity: z.string().nullable(),
@@ -154,6 +323,28 @@ export const architectureDocSchema = z.object({
 export type ArchitectureDoc = z.infer<typeof architectureDocSchema>;
 export type GraphNode = z.infer<typeof graphNodeSchema>;
 export type GraphEdge = z.infer<typeof graphEdgeSchema>;
+
+// Architecture section inside the canonical result: same graph/cycles/
+// metrics as the §4.4 document plus rule evaluations and findings.
+export const architectureSectionSchema = z
+  .object({
+    rule_evaluations: z.array(z.unknown()),
+    metric_definitions: z.unknown(),
+    metrics: z.array(metricRecordSchema),
+    graph: z
+      .object({
+        granularity: z.string().nullable(),
+        potentially_incomplete: z.boolean(),
+        nodes: z.array(graphNodeSchema),
+        edges: z.array(graphEdgeSchema),
+        external_and_unresolved_references: z.array(z.unknown()),
+      })
+      .passthrough(),
+    cycles: z.array(cycleSchema).nullable(),
+    findings: z.array(findingSchema),
+  })
+  .passthrough()
+  .nullable();
 
 // docs/13 §6–7 — status and summary slices for the Overview.
 const domainStateSchema = z.object({
@@ -223,6 +414,14 @@ export const analysisResultSchema = z
         timestamp: z.string().nullable(),
         analyzer_version: z.string().nullable().optional(),
         rule_set_version: z.string().nullable().optional(),
+        advisory_data: z
+          .object({
+            source: z.string(),
+            consulted_at: z.string().nullable(),
+            outcome: z.string(),
+          })
+          .nullable()
+          .optional(),
       })
       .passthrough(),
     repository: z
@@ -240,9 +439,11 @@ export const analysisResultSchema = z
     status: analysisStatusSchema,
     summary: analysisSummarySchema.nullable(),
     security: areaSectionSchema,
-    architecture: areaSectionSchema,
-    dependencies: areaSectionSchema,
-    code_structure: areaSectionSchema,
+    architecture: architectureSectionSchema,
+    dependencies: dependenciesSectionSchema,
+    code_structure: codeStructureSectionSchema,
+    files: z.array(fileRecordSchema).nullable(),
+    comparison: comparisonSchema.nullable().optional(),
   })
   .passthrough();
 
