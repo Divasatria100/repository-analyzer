@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.analyzers.findings import Confidence, Severity, create_finding
-from app.api.deps import get_db, get_github_client, reset_session_factory
+from app.api.deps import get_analysis_dispatcher, get_db, get_github_client, reset_session_factory
 from app.core.config import Settings
 from app.core.database import create_session_factory, session_scope
 from app.main import create_app
@@ -95,6 +95,11 @@ def _client(factory, scenario: str = "public_repo") -> TestClient:
 
     application.dependency_overrides[get_db] = override_db
     application.dependency_overrides[get_github_client] = lambda: _github(scenario)
+    # Contract tests verify acceptance shapes; post-acceptance execution is
+    # recorded, not run, so no test performs real retrieval here. The
+    # vertical slice (execution through indexing) is covered separately in
+    # tests/integration/test_vertical_slice.py.
+    application.dependency_overrides[get_analysis_dispatcher] = lambda: lambda *args, **kwargs: None
     return TestClient(application, raise_server_exceptions=False)
 
 

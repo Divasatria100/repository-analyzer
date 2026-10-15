@@ -8,9 +8,9 @@ out of band, so the 202 response always reflects the persisted stage.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.common import (
     canonical_for_snapshot,
@@ -19,7 +19,17 @@ from app.api.common import (
     status_rows,
     unavailable_areas,
 )
-from app.api.deps import get_db, get_github_client, get_settings_dep
+from app.api.deps import (
+    AnalysisDispatch,
+    get_analysis_dispatcher,
+    get_concurrency_manager,
+    get_db,
+    get_github_client,
+    get_retrieval_service,
+    get_session_factory,
+    get_settings_dep,
+    get_workspace_manager,
+)
 from app.api.errors import ApiError
 from app.api.pagination import paginate, parse_pagination
 from app.core.config import Settings
@@ -27,11 +37,14 @@ from app.models.repository import Analysis, Repository
 from app.reports.html import render_html
 from app.reports.markdown import render_markdown
 from app.repositories import ingestion as persistence
+from app.repository.concurrency import ConcurrencyManager
 from app.repository.errors import InvalidRepositoryUrlError
 from app.repository.github import GitHubClient
 from app.repository.identity import normalize_github_url
 from app.repository.ingestion import RULE_SET_VERSION
-from app.repository.retrieval import check_remote_size
+from app.repository.retrieval import RetrievalService, check_remote_size
+from app.repository.runner import RunnerDependencies
+from app.repository.workspace import WorkspaceManager
 from app.results import (
     analysis_section,
     comparison_to_dict,
@@ -68,6 +81,11 @@ SECTION_AREAS = {
 _db = Depends(get_db)
 _settings = Depends(get_settings_dep)
 _github = Depends(get_github_client)
+_workspaces = Depends(get_workspace_manager)
+_retrieval = Depends(get_retrieval_service)
+_concurrency = Depends(get_concurrency_manager)
+_session_factory = Depends(get_session_factory)
+_dispatcher = Depends(get_analysis_dispatcher)
 _comparison_base_query = Query(default=None)
 _category_query = Query(default=None)
 _severity_query = Query(default=None)
@@ -85,9 +103,15 @@ _json_query = Query(default="json")
 @router.post("/analyses", status_code=202)
 def create_analysis(
     body: AnalysisCreateRequest,
+    background_tasks: BackgroundTasks,
     session: Session = _db,
     settings: Settings = _settings,
     github: GitHubClient = _github,
+    workspaces: WorkspaceManager = _workspaces,
+    retrieval: RetrievalService = _retrieval,
+    concurrency: ConcurrencyManager = _concurrency,
+    session_factory: sessionmaker[Session] = _session_factory,  # type: ignore[assignment]
+    dispatch: AnalysisDispatch = _dispatcher,
 ) -> dict[str, object]:
     """Accept a public repository URL and persist a Queued analysis (§4.1).
 
@@ -95,6 +119,10 @@ def create_analysis(
     branch/commit resolution) runs before any row is written (docs/12
     §6.3). The remote always derives from the validated identity — never
     from client input.
+
+    Acceptance is committed before post-acceptance execution is
+    dispatched, so the background runner always observes durable state.
+    The 202 body still reflects the persisted acceptance stage.
     """
     raw_url = (body.url or "").strip()
     if not raw_url:
@@ -125,7 +153,18 @@ def create_analysis(
         analyzer_version=settings.application.version,
         rule_set_version=RULE_SET_VERSION,
     )
-    session.flush()
+    session.commit()
+    dispatch(
+        analysis.id,
+        RunnerDependencies(
+            settings=settings,
+            session_factory=session_factory,
+            workspaces=workspaces,
+            retrieval=retrieval,
+            github=github,
+            concurrency=concurrency,
+        ),
+    )
     return {
         "analysis_id": analysis.id,
         "repository_id": repository.id,
