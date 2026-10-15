@@ -7,7 +7,7 @@ import { routes } from "../router";
 // fresh QueryClientProvider (mirrors main.tsx, which provides the shared
 // query client above the router). Retries are off so failure tests settle.
 
-export function renderAt(path: string) {
+export function renderAt(path: string | { pathname: string; search: string; state?: unknown }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createMemoryRouter(routes, { initialEntries: [path] });
   render(

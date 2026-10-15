@@ -1,5 +1,10 @@
 import { createBrowserRouter, type RouteObject } from "react-router";
 import { AppShell } from "../components/AppShell";
+import { ArchitecturePage } from "../features/architecture/ArchitecturePage";
+import { FindingDetailPage } from "../features/findings/FindingDetailPage";
+import { FindingsPage } from "../features/findings/FindingsPage";
+import { SecurityPage } from "../features/findings/SecurityPage";
+import { OverviewPage } from "../features/overview/OverviewPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { NewAnalysisPage } from "../pages/NewAnalysisPage";
 import {
@@ -10,12 +15,12 @@ import {
   SettingsPage,
 } from "../pages/PlaceholderPages";
 import { AnalysisLayout } from "./AnalysisLayout";
-import { ANALYSIS_ID_PARAM, ROUTES } from "./routes";
+import { ANALYSIS_ID_PARAM, FINDING_ID_PARAM, ROUTES } from "./routes";
 
 // Route architecture per docs/14-ui-requirements.md (Sections 4–5).
-// Every page renders inside the shared AppShell. The New Analysis workflow
-// and the analysis status gate are fully implemented (TASK-180–188);
-// workspace sections keep honest placeholders until their phases.
+// Every page renders inside the shared AppShell. Overview, Findings,
+// Security, Finding Detail, and Architecture are implemented (TASK-189–198);
+// Dependencies, Code Structure, and Files keep honest placeholders.
 // Exported as data so tests can build a memory router from the same tree.
 export const routes: RouteObject[] = [
   {
@@ -43,15 +48,15 @@ export const routes: RouteObject[] = [
           },
           {
             path: "overview",
-            element: <SectionPlaceholder title="Overview" />,
+            element: <OverviewPage />,
           },
           {
             path: "security",
-            element: <SectionPlaceholder title="Security" />,
+            element: <SecurityPage />,
           },
           {
             path: "architecture",
-            element: <SectionPlaceholder title="Architecture" />,
+            element: <ArchitecturePage />,
           },
           {
             path: "dependencies",
@@ -67,7 +72,11 @@ export const routes: RouteObject[] = [
           },
           {
             path: "findings",
-            element: <SectionPlaceholder title="Findings" />,
+            element: <FindingsPage />,
+          },
+          {
+            path: `findings/:${FINDING_ID_PARAM}`,
+            element: <FindingDetailPage />,
           },
         ],
       },

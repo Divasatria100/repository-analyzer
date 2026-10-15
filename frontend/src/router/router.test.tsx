@@ -1,6 +1,12 @@
 import { screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderAt } from "../test/render";
+import {
+  analysisResultFixture,
+  architectureFixture,
+  findingsPageFixture,
+  findingFixture,
+} from "../test/fixtures";
 
 function mockAnalysisFetch(payload: unknown, status = 200) {
   window.fetch = vi.fn().mockResolvedValue({
@@ -10,6 +16,24 @@ function mockAnalysisFetch(payload: unknown, status = 200) {
   } as Response);
 }
 
+function mockWorkspaceFetch() {
+  const routes = [
+    { match: "/architecture", payload: architectureFixture() },
+    { match: "/findings", payload: findingsPageFixture([findingFixture()], 1) },
+    { match: "/api/analyses/abc123", payload: analysisResultFixture() },
+  ];
+  window.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input);
+    const route = routes.find((entry) => url.includes(entry.match));
+    const status = 200;
+    return Promise.resolve({
+      ok: true,
+      status,
+      text: () => Promise.resolve(JSON.stringify(route?.payload ?? {})),
+    } as Response);
+  });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -17,13 +41,9 @@ afterEach(() => {
 
 describe.each([
   ["/analysis/new", "Analyze a public repository"],
-  ["/analysis/abc123/overview", "Overview"],
-  ["/analysis/abc123/security", "Security"],
-  ["/analysis/abc123/architecture", "Architecture"],
   ["/analysis/abc123/dependencies", "Dependencies"],
   ["/analysis/abc123/code-structure", "Code Structure"],
   ["/analysis/abc123/files", "Files"],
-  ["/analysis/abc123/findings", "Findings"],
   ["/history", "History"],
   ["/settings", "Settings"],
 ])("route %s", (path, title) => {
@@ -34,6 +54,49 @@ describe.each([
     expect(screen.getAllByRole("heading", { name: title }).length).toBeGreaterThan(0);
     // Shell navigation is present on every page.
     expect(screen.getByRole("link", { name: "New Analysis" })).toBeDefined();
+  });
+});
+
+describe("implemented workspace routes", () => {
+  it("renders the Overview from persisted data", async () => {
+    mockWorkspaceFetch();
+    renderAt("/analysis/abc123/overview");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "acme/web" })).toBeDefined();
+    });
+    expect(screen.getByRole("link", { name: "New Analysis" })).toBeDefined();
+  });
+
+  it("renders the Security explorer", async () => {
+    mockWorkspaceFetch();
+    renderAt("/analysis/abc123/security");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Security" })).toBeDefined();
+    });
+  });
+
+  it("renders the Architecture workspace", async () => {
+    mockWorkspaceFetch();
+    renderAt("/analysis/abc123/architecture");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Architecture" })).toBeDefined();
+    });
+  });
+
+  it("renders the Findings explorer", async () => {
+    mockWorkspaceFetch();
+    renderAt("/analysis/abc123/findings");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Findings" })).toBeDefined();
+    });
+  });
+
+  it("renders Finding Detail for a stable identity", async () => {
+    mockWorkspaceFetch();
+    renderAt("/analysis/abc123/findings/F-0001");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "SEC-HARDCODED-SECRET" })).toBeDefined();
+    });
   });
 });
 

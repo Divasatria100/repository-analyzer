@@ -13,8 +13,11 @@ export const ROUTES = {
   analysisCodeStructure: (analysisId: string) => `/analysis/${analysisId}/code-structure`,
   analysisFiles: (analysisId: string) => `/analysis/${analysisId}/files`,
   analysisFindings: (analysisId: string) => `/analysis/${analysisId}/findings`,
+  analysisFindingDetail: (analysisId: string, findingId: string) =>
+    `/analysis/${analysisId}/findings/${findingId}`,
   history: "/history",
   settings: "/settings",
 } as const;
 
 export const ANALYSIS_ID_PARAM = "analysisId";
+export const FINDING_ID_PARAM = "findingId";

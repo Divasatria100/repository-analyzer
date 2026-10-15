@@ -7,6 +7,15 @@ import {
   analysisDetailSchema,
   apiErrorEnvelopeSchema,
 } from "../schemas/analysis";
+import {
+  type AnalysisResult,
+  type ArchitectureDoc,
+  type FindingsPage,
+  type FindingsQuery,
+  analysisResultSchema,
+  architectureDocSchema,
+  findingsPageSchema,
+} from "../schemas/results";
 
 // Transport layer for the analyses API (docs/17-api-contract.md).
 // Serialization, envelope parsing, and HTTP error normalization live here;
@@ -64,7 +73,10 @@ async function request<T>(
       ...init,
       headers: { "content-type": "application/json", ...(init.headers ?? {}) },
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error;
+    }
     throw new ApiRequestError(
       "NETWORK_ERROR",
       "Could not reach the backend. Check that it is running and try again.",
@@ -107,5 +119,63 @@ export async function getAnalysis(analysisId: string): Promise<AnalysisDetail> {
     `/api/analyses/${encodeURIComponent(analysisId)}`,
     { method: "GET" },
     (payload) => analysisDetailSchema.parse(payload),
+  );
+}
+
+/** GET /api/analyses/{id} parsed as the full canonical result (completed only). */
+export async function getAnalysisResult(
+  analysisId: string,
+  signal?: AbortSignal,
+): Promise<AnalysisResult> {
+  return request(
+    `/api/analyses/${encodeURIComponent(analysisId)}`,
+    { method: "GET", signal },
+    (payload) => analysisResultSchema.parse(payload),
+  );
+}
+
+function repeatParams(params: URLSearchParams, key: string, values: string[]): void {
+  for (const value of values) {
+    if (value !== "") {
+      params.append(key, value);
+    }
+  }
+}
+
+/** GET /api/analyses/{id}/findings — server-side filter/sort/paginate (§4.3). */
+export async function listFindings(
+  analysisId: string,
+  query: FindingsQuery,
+  signal?: AbortSignal,
+): Promise<FindingsPage> {
+  const params = new URLSearchParams();
+  repeatParams(params, "category", query.category);
+  repeatParams(params, "severity", query.severity);
+  repeatParams(params, "confidence", query.confidence);
+  repeatParams(params, "rule_id", query.rule_id);
+  if (query.q.trim() !== "") {
+    params.set("q", query.q.trim());
+  }
+  params.set("sort", query.sort);
+  params.set("order", query.order);
+  params.set("page", String(query.page));
+  params.set("page_size", String(query.page_size));
+  const suffix = params.toString();
+  return request(
+    `/api/analyses/${encodeURIComponent(analysisId)}/findings${suffix ? `?${suffix}` : ""}`,
+    { method: "GET", signal },
+    (payload) => findingsPageSchema.parse(payload),
+  );
+}
+
+/** GET /api/analyses/{id}/architecture — bounded graph document (docs/17 §4.4). */
+export async function getArchitecture(
+  analysisId: string,
+  signal?: AbortSignal,
+): Promise<ArchitectureDoc> {
+  return request(
+    `/api/analyses/${encodeURIComponent(analysisId)}/architecture`,
+    { method: "GET", signal },
+    (payload) => architectureDocSchema.parse(payload),
   );
 }
