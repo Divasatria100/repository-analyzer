@@ -1,18 +1,19 @@
 """Repository-ingestion lifecycle coordinator (docs/10 §§5.1–5.5).
 
-Conceptual flow (stops cleanly at the ingestion boundary; parsing and
-later stages arrive in later phases):
+Two entry points share the resolution → retrieval → indexing core:
 
-```text
-Validate URL -> Validate Public Repository -> Retrieve Metadata
-  -> Resolve Branch -> Resolve Commit -> Persist Analysis Context
-  -> Acquire Analysis Slot -> Create Workspace -> Retrieve Immutable Commit
-  -> Validate Retrieval Result -> Index Files -> Detect Languages
-```
+- ``continue_ingestion`` resumes an already-persisted analysis (the
+  POST → BackgroundTasks production path) through branch/commit
+  resolution, retrieval, workspace creation, file indexing, and language
+  detection. The analysis rests at ``DetectingLanguages`` with no
+  outcome; parsing and later stages arrive in later phases.
+- ``ingest_repository`` is the direct (non-runner) path: it validates,
+  persists, and then runs ``continue_ingestion`` followed by the parse
+  phase, resting at ``BuildingCodeModel``. Its only callers are tests.
 
-Indexing, language detection, and parsing run here because the workspace
-snapshot is their only input; analyzers arrive in later phases (the
-analysis row therefore rests at BuildingCodeModel with no outcome).
+Indexing and language detection run here because the workspace snapshot
+is their only input; parsing runs only in the ``ingest_repository`` path
+above, and analyzers arrive in later phases.
 
 Validation failures happen before any persistence (docs/12 §6.3);
 retrieval or indexing failures clean the workspace and mark the analysis

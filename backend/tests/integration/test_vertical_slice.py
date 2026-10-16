@@ -32,10 +32,16 @@ from app.main import create_app
 from app.models.base import Base
 from app.models.indexing import File, Limitation
 from app.models.repository import Analysis as AnalysisModel
+from app.models.repository import Repository as RepositoryModel
 from app.models.results import AnalysisSnapshot
 from app.repositories import ingestion as persistence
 from app.repository.concurrency import ConcurrencyManager
-from app.repository.errors import IndexingError, RetrievalError
+from app.repository.errors import (
+    BranchNotFoundError,
+    CommitNotFoundError,
+    IndexingError,
+    RetrievalError,
+)
 from app.repository.github import GitHubClient
 from app.repository.identity import RepositoryIdentity
 from app.repository.ingestion import continue_ingestion
@@ -45,6 +51,7 @@ from app.repository.workspace import WorkspaceManager
 from app.services.http_client import RetryPolicy, ServiceClient
 from tests.fixtures.helpers.repo_helpers import init_git_repo
 from tests.mocks.github import COMMIT_SHA, DEFAULT_BRANCH, OWNER, REPO
+from tests.mocks.github import github_transport as mock_scenario_transport
 
 pytestmark = pytest.mark.integration
 
@@ -74,6 +81,8 @@ KNOWN_EXPLANATIONS = frozenset(
         "The analysis workspace could not be prepared.",
         "Too many analyses are running. Please try again later.",
         "The analysis could not be completed.",
+        "The requested branch could not be resolved.",
+        "The requested commit could not be resolved.",
     }
 )
 
@@ -125,6 +134,11 @@ def _github(head_sha: str) -> GitHubClient:
     return GitHubClient(_service_client(_github_transport(head_sha)))
 
 
+def _github_scenario(scenario: str) -> GitHubClient:
+    """GitHub client replaying a mock scenario (e.g. branch/commit gone)."""
+    return GitHubClient(_service_client(mock_scenario_transport(scenario)))
+
+
 class _Recorder:
     """Test dispatcher: records dispatches instead of running retrieval."""
 
@@ -135,7 +149,13 @@ class _Recorder:
         self.calls.append((analysis_id, deps))
 
 
-def _slice_client(factory, github: GitHubClient, recorder: _Recorder, workspace_root: Path):
+def _slice_client(
+    factory,
+    github: GitHubClient,
+    recorder: _Recorder,
+    workspace_root: Path,
+    concurrency: ConcurrencyManager | None = None,
+):
     reset_session_factory()
     application = create_app(Settings(environment="test"))
 
@@ -152,7 +172,9 @@ def _slice_client(factory, github: GitHubClient, recorder: _Recorder, workspace_
     application.dependency_overrides[get_retrieval_service] = lambda: (
         RetrievalService.from_settings(load_settings())
     )
-    application.dependency_overrides[get_concurrency_manager] = lambda: ConcurrencyManager(4)
+    application.dependency_overrides[get_concurrency_manager] = lambda: (
+        concurrency if concurrency is not None else ConcurrencyManager(4)
+    )
     return TestClient(application, raise_server_exceptions=False)
 
 
@@ -498,5 +520,141 @@ def test_continue_ingestion_stops_at_language_detection(tmp_path: Path) -> None:
             assert result.context.resolved_commit_sha == head
         state = _analysis_state(factory, analysis_id)
         assert state.stage == "DetectingLanguages" and state.outcome is None
+    finally:
+        engine.dispose()
+
+
+def test_runner_branch_resolution_failure_marks_failed_durably(tmp_path: Path) -> None:
+    """F-1: branch deleted after acceptance still persists Failed (no rollback loss)."""
+    engine, factory = _factory()
+    try:
+        recorder: _Recorder = _Recorder()
+        source = tmp_path / "source"
+        head = init_git_repo(source, FIXTURE_FILES)
+        client = _slice_client(factory, _github(head), recorder, tmp_path / "workspaces")
+        created = _seed_post(factory, client, branch="main")
+        with pytest.raises(BranchNotFoundError):
+            run_analysis_to_index(
+                analysis_id=created["analysis_id"],
+                deps=_runner_deps(
+                    factory, _github_scenario("branch_missing"), tmp_path / "workspaces"
+                ),
+                remote_url_override=str(source),
+                allow_local_paths=True,
+            )
+        # The Failed state must survive the re-raised exception (session closed).
+        analysis = _analysis_state(factory, created["analysis_id"])
+        assert analysis.outcome == "Failed"
+        assert analysis.explanation == "The requested branch could not be resolved."
+        assert str(tmp_path) not in (analysis.explanation or "")
+        assert list((tmp_path / "workspaces").glob("ws-*")) == []
+        assert _row_counts(factory, created["analysis_id"]) == {
+            "files": 0,
+            "limitations": 0,
+            "snapshots": 0,
+        }
+
+        body = client.get(f"/api/analyses/{created['analysis_id']}").json()
+        assert body["status"]["outcome"] == "Failed"
+        assert body["status"]["explanation"] == "The requested branch could not be resolved."
+        assert body["security"] is None and body["files"] is None
+    finally:
+        engine.dispose()
+
+
+def test_runner_commit_resolution_failure_marks_failed_durably(tmp_path: Path) -> None:
+    """F-1: commit unresolvable at runner time still persists Failed (no rollback loss)."""
+    engine, factory = _factory()
+    try:
+        recorder: _Recorder = _Recorder()
+        source = tmp_path / "source"
+        head = init_git_repo(source, FIXTURE_FILES)
+        client = _slice_client(factory, _github(head), recorder, tmp_path / "workspaces")
+        created = _seed_post(factory, client, commit=head)
+        with pytest.raises(CommitNotFoundError):
+            run_analysis_to_index(
+                analysis_id=created["analysis_id"],
+                deps=_runner_deps(
+                    factory, _github_scenario("commit_missing"), tmp_path / "workspaces"
+                ),
+                remote_url_override=str(source),
+                allow_local_paths=True,
+            )
+        analysis = _analysis_state(factory, created["analysis_id"])
+        assert analysis.outcome == "Failed"
+        assert analysis.explanation == "The requested commit could not be resolved."
+        assert str(tmp_path) not in (analysis.explanation or "")
+        assert list((tmp_path / "workspaces").glob("ws-*")) == []
+        assert _row_counts(factory, created["analysis_id"]) == {
+            "files": 0,
+            "limitations": 0,
+            "snapshots": 0,
+        }
+
+        body = client.get(f"/api/analyses/{created['analysis_id']}").json()
+        assert body["status"]["outcome"] == "Failed"
+        assert body["status"]["explanation"] == "The requested commit could not be resolved."
+        assert body["security"] is None and body["files"] is None
+    finally:
+        engine.dispose()
+
+
+def test_post_concurrency_exhaustion_returns_429_without_side_effects(
+    tmp_path: Path,
+) -> None:
+    """F-2: saturated bound declines POST with 429, no rows, no dispatch, no leak."""
+    engine, factory = _factory()
+    try:
+        recorder: _Recorder = _Recorder()
+        source = tmp_path / "source"
+        head = init_git_repo(source, FIXTURE_FILES)
+        manager = ConcurrencyManager(1)
+        client = _slice_client(
+            factory,
+            _github(head),
+            recorder,
+            tmp_path / "workspaces",
+            concurrency=manager,
+        )
+        with manager.acquire("other-analysis"):
+            response = client.post("/api/analyses", json={"url": FIXTURE_URL})
+        assert response.status_code == 429, response.text
+        body = response.json()
+        assert body["error"]["code"] == "RATE_LIMITED"
+        assert "Too many analyses" in body["error"]["message"]
+        assert recorder.calls == []
+        with session_scope(factory) as session:
+            analyses = session.scalar(select(func.count()).select_from(AnalysisModel))
+            repositories = session.scalar(select(func.count()).select_from(RepositoryModel))
+            assert analyses == 0
+            assert repositories == 0
+        # The admission check holds no slot: a later submission is accepted.
+        created = _seed_post(factory, client)
+        assert created["stage"] == "Queued"
+        assert len(recorder.calls) == 1
+    finally:
+        engine.dispose()
+
+
+def test_post_oversize_repository_rejected_without_side_effects(tmp_path: Path) -> None:
+    """F-3: oversize submission is a controlled 422 naming the limit, not a 500."""
+    engine, factory = _factory()
+    try:
+        recorder: _Recorder = _Recorder()
+        source = tmp_path / "source"
+        head = init_git_repo(source, FIXTURE_FILES)
+        oversized = GitHubClient(_service_client(_github_transport(head, size_kb=300 * 1024)))
+        client = _slice_client(factory, oversized, recorder, tmp_path / "workspaces")
+        response = client.post("/api/analyses", json={"url": FIXTURE_URL})
+        assert response.status_code == 422, response.text
+        body = response.json()
+        assert body["error"]["code"] == "REPOSITORY_NOT_ACCESSIBLE"
+        assert "size limit" in body["error"]["message"]
+        assert recorder.calls == []
+        with session_scope(factory) as session:
+            analyses = session.scalar(select(func.count()).select_from(AnalysisModel))
+            repositories = session.scalar(select(func.count()).select_from(RepositoryModel))
+            assert analyses == 0
+            assert repositories == 0
     finally:
         engine.dispose()

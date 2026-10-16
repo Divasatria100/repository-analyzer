@@ -142,6 +142,14 @@ def create_analysis(
         github.resolve_branch(identity, body.branch)
     if body.commit is not None:
         github.resolve_commit(identity, body.commit)
+    # F-2: admission check against the concurrency bound (docs/17 §4.1
+    # RATE_LIMITED). Check-and-release only: no slot is held past this
+    # point, so nothing can leak when validation or persistence fails;
+    # the runner re-acquires as the enforcement backstop. Exhaustion
+    # propagates as ConcurrencyExhaustedError and maps to HTTP 429 with
+    # no rows persisted and nothing dispatched.
+    with concurrency.acquire(f"admission:{identity.full_name}"):
+        pass
     repository = persistence.get_or_create_repository(
         session, identity, default_branch=metadata.default_branch
     )

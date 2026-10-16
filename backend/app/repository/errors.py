@@ -126,7 +126,16 @@ class RetrievalTransportError(RetrievalError):
 
 
 class RetrievalSizeLimitError(RetrievalError):
-    """Repository exceeds a configured size/count/depth limit."""
+    """Repository exceeds a configured size/count/depth limit.
+
+    F-3: docs/17 §3.4 defines no dedicated size-limit code, so the most
+    conservative existing code is used — the submission is valid in form
+    but cannot be taken into analysis (HTTP 422, limit kind named safely
+    in the message). Retrieval-phase raises keep the same user message
+    through the runner; only request-path mapping changes.
+    """
+
+    contract_code = "REPOSITORY_NOT_ACCESSIBLE"
 
     def __init__(
         self,

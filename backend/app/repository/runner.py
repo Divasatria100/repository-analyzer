@@ -113,8 +113,12 @@ def run_analysis_to_index(
         except IngestionError as exc:
             # Retrieval/indexing failures are already recorded by the
             # continuation; anything else gets its user-safe message.
+            # F-1: commit the Failed state explicitly — mark_failed only
+            # flushes, and the re-raise below would otherwise roll the
+            # whole scope back to Queued.
             if analysis.outcome is None:
                 persistence.mark_failed(session, analysis, exc.user_message)
+                session.commit()
             log_event(
                 _logger,
                 logging.WARNING,
@@ -125,7 +129,10 @@ def run_analysis_to_index(
             )
             raise
         except Exception as exc:
+            # F-1: same durability requirement as above — the Failed mark
+            # must survive the re-raise through session_scope.
             persistence.mark_failed(session, analysis, "The analysis could not be completed.")
+            session.commit()
             log_event(
                 _logger,
                 logging.ERROR,
