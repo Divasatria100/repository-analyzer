@@ -59,6 +59,29 @@ def build_queries(
     return queries, skipped
 
 
+def advisory_status(outcome: OsvOutcome, query_count: int) -> str | None:
+    """Derive the advisory-data consultation status from a raw OSV outcome.
+
+    Returns the persisted vocabulary validated by ``ADVISORY_STATUSES``
+    (docs/13 §4.3, docs/12 §4): ``succeeded`` when every eligible query was
+    assessed,     ``partly succeeded`` when only some could be (including truncated
+    hydrations that still yielded associations), and
+    ``unavailable`` when the advisory service could not provide anything.
+    ``None`` means OSV was never consulted (no eligible query), which is
+    the only case that maps to ``advisory_data: null`` — never a false
+    clean result (PIPE-REQ-042).
+    """
+    if query_count <= 0:
+        return None
+    failed = sum(1 for position in outcome.failed_indexes if 0 <= position < query_count)
+    if failed == 0:
+        return "succeeded"
+    obtained = any(outcome.advisories.get(position) for position in range(query_count))
+    if failed >= query_count and not obtained:
+        return "unavailable"
+    return "partly succeeded"
+
+
 __all__ = [
     "Advisory",
     "MAX_BATCH_QUERIES",
@@ -67,6 +90,7 @@ __all__ = [
     "OsvClient",
     "OsvOutcome",
     "OsvQuery",
+    "advisory_status",
     "build_queries",
     "osv_client_from_network_settings",
     "parse_advisory",

@@ -51,12 +51,19 @@ from app.analyzers.dependency.metadata import (
     DependencyRuleSpec,
 )
 from app.analyzers.dependency.models import (
+    Advisory,
     DependencyOccurrence,
     ManifestOutcome,
     ManifestRef,
     SupportState,
 )
-from app.analyzers.dependency.osv import OsvClient, build_queries
+from app.analyzers.dependency.osv import (
+    OsvClient,
+    OsvOutcome,
+    OsvQuery,
+    advisory_status,
+    build_queries,
+)
 from app.analyzers.dependency.parsers import parse_manifest_text, read_manifest_text
 from app.analyzers.findings import (
     Confidence,
@@ -559,13 +566,34 @@ def execute_unused_candidate(
     )
 
 
+def _advisories_by_triple(
+    queries: list[OsvQuery], outcome: OsvOutcome
+) -> dict[tuple[str, str, str], tuple[Advisory, ...]]:
+    """Bounded advisories keyed by (ecosystem, package, version).
+
+    Only advisories actually obtained for an exact-version query are
+    recorded; they feed the dependency-level ``advisories`` associations
+    (docs/12 §4.6.1, docs/13 §11.3). Duplicates are collapsed by id.
+    """
+    grouped: dict[tuple[str, str, str], dict[str, Advisory]] = {}
+    for position, advisories in outcome.advisories.items():
+        if position >= len(queries):
+            continue
+        query = queries[position]
+        bucket = grouped.setdefault((query.ecosystem, query.package_name, query.version), {})
+        for advisory in advisories:
+            bucket.setdefault(advisory.advisory_id, advisory)
+    return {key: tuple(bucket.values()) for key, bucket in grouped.items()}
+
+
 def execute_known_vulnerability(
     execution_context: RuleExecutionContext,
     inventory: Inventory,
-    osv_client: OsvClient | None,
+    analyzer: DependencyAnalyzer,
 ) -> RuleOutcome:
     """DEP-KNOWN-VULNERABILITY (DEP-REQ-001): exact-version matches only."""
     context = execution_context.context
+    osv_client = analyzer.osv_client
     queries, skipped = build_queries(inventory.occurrences)
     extra = [
         Limitation(
@@ -575,6 +603,7 @@ def execute_known_vulnerability(
         for index, reason in sorted(skipped.items())
     ]
     if osv_client is None:
+        analyzer.record_advisory_status(context.analysis_id, None)
         extra.append(
             Limitation(
                 scope=f"dependency:{KNOWN_VULNERABILITY_SPEC.rule_id}",
@@ -588,6 +617,8 @@ def execute_known_vulnerability(
             limitations=_base_limitations(KNOWN_VULNERABILITY_SPEC.rule_id, inventory, extra),
         )
     outcome = osv_client.query_batch(queries)
+    analyzer.record_advisory_status(context.analysis_id, advisory_status(outcome, len(queries)))
+    analyzer.record_advisories(context.analysis_id, _advisories_by_triple(queries, outcome))
     if outcome.transport_failed:
         extra.append(
             Limitation(
@@ -700,7 +731,7 @@ def _bind(
     def execute(execution_context: RuleExecutionContext) -> RuleOutcome:
         inventory = analyzer.inventory_for(execution_context.context)
         if kind == "known":
-            return execute_known_vulnerability(execution_context, inventory, analyzer.osv_client)
+            return execute_known_vulnerability(execution_context, inventory, analyzer)
         if kind == "duplicate":
             return execute_duplicate_version(execution_context, inventory)
         if kind == "count":
@@ -745,11 +776,45 @@ class DependencyAnalyzer(Analyzer):
         self._provider = provider
         self._osv_client = osv_client
         self._inventory_cache: dict[str, Inventory] = {}
+        self._advisory_status: dict[str, str | None] = {}
+        self._advisories: dict[str, dict[tuple[str, str, str], tuple[Advisory, ...]]] = {}
 
     @property
     def osv_client(self) -> OsvClient | None:
         """Injected advisory client (None means advisory-unavailable)."""
         return self._osv_client
+
+    def record_advisory_status(self, analysis_id: str, status: str | None) -> None:
+        """Record the advisory-data consultation status for one analysis.
+
+        ``None`` means OSV was never consulted (no eligible query); a string
+        is one of the persisted ``ADVISORY_STATUSES`` vocabulary. The
+        pipeline reads this to record the honest advisory reference
+        (PIPE-REQ-042, PIPE-REQ-044) instead of assuming success.
+        """
+        self._advisory_status[analysis_id] = status
+
+    def advisory_status_for(self, context: object) -> str | None:
+        """Advisory-data consultation status recorded for an analysis."""
+        analysis_id = getattr(context, "analysis_id", "-")
+        return self._advisory_status.get(analysis_id)
+
+    def record_advisories(
+        self,
+        analysis_id: str,
+        advisories: dict[tuple[str, str, str], tuple[Advisory, ...]],
+    ) -> None:
+        """Record bounded advisories keyed by (ecosystem, package, version).
+
+        The pipeline maps these onto dependency occurrences so the
+        association reaches persistence and the read result (docs/12 §4.6.1).
+        """
+        self._advisories[analysis_id] = advisories
+
+    def advisories_for(self, context: object) -> dict[tuple[str, str, str], tuple[Advisory, ...]]:
+        """Bounded advisories obtained for an analysis (empty when none)."""
+        analysis_id = getattr(context, "analysis_id", "-")
+        return self._advisories.get(analysis_id, {})
 
     def inventory_for(self, context: object) -> Inventory:
         """Normalized inventory for an analysis (cached per analysis ID)."""

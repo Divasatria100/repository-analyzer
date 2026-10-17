@@ -24,6 +24,7 @@ Boundaries (mirrors ``run_analysis_to_index``):
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -62,9 +63,11 @@ from app.core.database import session_scope
 from app.core.logging import get_logger, log_event, log_exception
 from app.models.indexing import File as FileRow
 from app.models.repository import Analysis, Repository
+from app.parsers.pipeline import run_parse_phase
 from app.repositories import ingestion as persistence
 from app.repositories.indexing import get_files
 from app.repositories.results import (
+    DependencyAdvisoryInput,
     DependencyInput,
     DomainStateInput,
     FileCoverageInput,
@@ -104,6 +107,9 @@ from app.results.aggregation import (
 )
 
 _logger = get_logger("analysis_pipeline")
+
+#: The single V1.0 advisory source (docs/09 §5.9).
+_ADVISORY_SOURCE = "OSV"
 
 #: Manifest support state to the canonical file-coverage vocabulary.
 _SUPPORT_TO_COVERAGE = {
@@ -250,8 +256,9 @@ def _run_stages(
     )
     persistence.set_stage(session, analysis, "BuildingCodeModel")
     ncm = parse.repository
-    if ncm is None:  # pragma: no cover - run_parse_phase always returns an NCM
-        raise AnalysisPipelineError("The normalized code model could not be built.")
+    # run_parse_phase always returns a normalized code model; the assertion
+    # states the invariant for the type checker without dead handling code.
+    assert ncm is not None
 
     persistence.set_stage(session, analysis, "RunningAnalysis")
     thresholds = default_thresholds()
@@ -305,7 +312,6 @@ def _run_stages(
         ncm=ncm,
         file_rows=file_rows,
         thresholds=thresholds,
-        osv_client=osv_client,
     )
     persistence.set_stage(session, analysis, "GeneratingReports")
     return aggregated
@@ -322,7 +328,6 @@ def _aggregate_and_persist(
     ncm: Any,
     file_rows: list[FileRow],
     thresholds: Any,
-    osv_client: OsvClient | None,
 ) -> Any:
     """Aggregate analyzer outputs and persist every result section."""
     file_metas = [_file_meta(row) for row in file_rows]
@@ -376,16 +381,18 @@ def _aggregate_and_persist(
     )
 
     rules = ensure_rules(session, analysis.rule_set_version, definitions)
+    advisory = _advisory_status(analyzers, context)
     record_results_context(
         session,
         analysis,
         configuration=configuration,
-        advisory_source="OSV" if osv_client is not None else None,
-        advisory_status="succeeded" if osv_client is not None else None,
+        advisory_source=_ADVISORY_SOURCE if advisory is not None else None,
+        advisory_consulted_at=datetime.now(UTC) if advisory is not None else None,
+        advisory_status=advisory,
     )
 
     module_inputs, architecture_metrics = _architecture_inputs(analyzers, context)
-    dependency_inputs = _dependency_inputs(inventory)
+    dependency_inputs = _dependency_inputs(inventory, _advisories(analyzers, context))
     code_metrics = _code_structure_metrics(analyzers, context)
 
     persist_modules(session, analysis.id, module_inputs)
@@ -511,6 +518,29 @@ def _dependency_inventory(analyzers: list[Any], context: AnalysisContext) -> Inv
         if analyzer.id == "dependency":
             return analyzer.inventory_for(context)  # type: ignore[no-any-return]
     return None
+
+
+def _advisory_status(analyzers: list[Any], context: AnalysisContext) -> str | None:
+    """Advisory-data consultation status recorded by the dependency analyzer.
+
+    ``None`` means OSV was never consulted (no eligible query); otherwise the
+    honest ``succeeded`` / ``partly succeeded`` / ``unavailable`` outcome is
+    recorded instead of assuming success (PIPE-REQ-042, PIPE-REQ-044).
+    """
+    for analyzer in analyzers:
+        if analyzer.id == "dependency":
+            return analyzer.advisory_status_for(context)  # type: ignore[no-any-return]
+    return None
+
+
+def _advisories(
+    analyzers: list[Any], context: AnalysisContext
+) -> dict[tuple[str, str, str], tuple[Any, ...]]:
+    """Bounded advisories obtained by the dependency analyzer (may be empty)."""
+    for analyzer in analyzers:
+        if analyzer.id == "dependency":
+            return analyzer.advisories_for(context)  # type: ignore[no-any-return]
+    return {}
 
 
 def _manifest_states(inventory: Inventory | None) -> dict[str, str]:
@@ -705,13 +735,35 @@ def _push_metric(
     metrics.append(metric)
 
 
-def _dependency_inputs(inventory: Inventory | None) -> list[DependencyInput]:
-    """Map normalized occurrences to persistence inputs (deduplicated)."""
+def _dependency_inputs(
+    inventory: Inventory | None,
+    advisories: dict[tuple[str, str, str], tuple[Any, ...]] | None = None,
+) -> list[DependencyInput]:
+    """Map normalized occurrences to persistence inputs (deduplicated).
+
+    Advisory associations obtained by the analyzer are attached to every
+    occurrence carrying the matching (ecosystem, package, version) triple
+    (docs/12 §4.6.1); they are never fabricated when no advisory matched.
+    """
     if inventory is None:
         return []
+    lookup = advisories or {}
     inputs: list[DependencyInput] = []
     seen: set[Any] = set()
     for occurrence in inventory.occurrences:
+        triple = (
+            occurrence.ecosystem,
+            occurrence.canonical_name,
+            (occurrence.resolved_version or "").strip(),
+        )
+        associated = tuple(
+            DependencyAdvisoryInput(
+                advisory_id=advisory.advisory_id,
+                source=_ADVISORY_SOURCE,
+                affected_version=advisory.affected_version,
+            )
+            for advisory in lookup.get(triple, ())
+        )
         item = DependencyInput(
             ecosystem=occurrence.ecosystem,
             canonical_name=occurrence.canonical_name,
@@ -724,6 +776,7 @@ def _dependency_inputs(inventory: Inventory | None) -> list[DependencyInput]:
             runtime_context=occurrence.runtime_context,
             source_line=occurrence.source_line,
             kind=occurrence.kind,
+            advisories=associated,
         )
         key = item.key()
         if key in seen:
@@ -763,6 +816,3 @@ def _code_structure_metrics(analyzers: list[Any], context: AnalysisContext) -> l
 
 # Re-exported for callers that build the pipeline in tests.
 __all__ = ["AnalysisPipelineError", "run_analysis_pipeline"]
-
-# Imported late to keep the module-level import graph flat.
-from app.parsers.pipeline import run_parse_phase  # noqa: E402  (import order intentional)

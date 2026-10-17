@@ -13,7 +13,9 @@ import pytest
 
 from app.analyzers.dependency.osv import (
     OsvClient,
+    OsvOutcome,
     OsvQuery,
+    advisory_status,
     build_queries,
     osv_client_from_network_settings,
     parse_advisory,
@@ -472,3 +474,31 @@ def test_entries_without_ids_are_not_clean() -> None:
     outcome = client.query_batch([OsvQuery("pypi", "requests", "2.31.0")])
     assert outcome.advisories[0] == []
     assert 0 in outcome.failed_indexes
+
+
+def test_advisory_status_none_when_no_eligible_query() -> None:
+    """No eligible query means OSV was never consulted (advisory_data null)."""
+    assert advisory_status(OsvOutcome(), 0) is None
+
+
+def test_advisory_status_succeeded_when_all_assessed() -> None:
+    outcome = OsvOutcome(advisories={0: [], 1: []})
+    assert advisory_status(outcome, 2) == "succeeded"
+
+
+def test_advisory_status_partly_succeeded_when_some_failed() -> None:
+    outcome = OsvOutcome(advisories={0: []}, failed_indexes={1})
+    assert advisory_status(outcome, 2) == "partly succeeded"
+
+
+def test_advisory_status_unavailable_when_nothing_obtained() -> None:
+    """A transport failure over every query is unavailable, never clean."""
+    outcome = OsvOutcome(transport_failed=True, failed_indexes={0, 1})
+    assert advisory_status(outcome, 2) == "unavailable"
+
+
+def test_advisory_status_partly_when_all_failed_but_data_obtained() -> None:
+    """Advisories obtained despite truncation are partial, not unavailable."""
+    advisory = parse_advisory({"id": "GHSA-x"}, ecosystem="pypi", package_name="requests")
+    outcome = OsvOutcome(advisories={0: [advisory]}, failed_indexes={0})
+    assert advisory_status(outcome, 1) == "partly succeeded"

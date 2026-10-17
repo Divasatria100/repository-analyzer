@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis import run_analysis_pipeline
+from app.analyzers.dependency.osv import OsvClient, osv_client_from_network_settings
 from app.core.config import Settings, get_settings
 from app.core.database import create_engine_from_settings, create_session_factory, session_scope
 from app.repository.concurrency import ConcurrencyManager
@@ -111,6 +112,12 @@ def get_analysis_dispatcher(background_tasks: BackgroundTasks) -> AnalysisDispat
     """
 
     def dispatch(analysis_id: str, deps: RunnerDependencies) -> None:
-        background_tasks.add_task(run_analysis_pipeline, analysis_id=analysis_id, deps=deps)
+        osv_client = OsvClient(osv_client_from_network_settings(deps.settings.network))
+        background_tasks.add_task(
+            run_analysis_pipeline,
+            analysis_id=analysis_id,
+            deps=deps,
+            osv_client=osv_client,
+        )
 
     return dispatch
