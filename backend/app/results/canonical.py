@@ -65,7 +65,16 @@ SEVERITIES = ("Critical", "High", "Medium", "Low", "Info")
 CONFIDENCES = ("High", "Medium", "Low")
 
 #: Stored file-type values to canonical labels (docs/13 §13 table).
-FILE_TYPES = {"source": "source", "manifest": "dependency manifest", "unknown": "other"}
+FILE_TYPES = {
+    "source": "source",
+    "configuration": "configuration",
+    "manifest": "dependency manifest",
+    "documentation": "documentation",
+    "other": "other",
+    "link": "link",
+    "special": "other",
+    "unknown": "other",
+}
 
 #: Stored support values to canonical labels (docs/13 §13 table).
 SUPPORT_LABELS = {

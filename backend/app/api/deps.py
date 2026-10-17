@@ -12,12 +12,13 @@ from collections.abc import Callable, Iterator
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.analysis import run_analysis_pipeline
 from app.core.config import Settings, get_settings
 from app.core.database import create_engine_from_settings, create_session_factory, session_scope
 from app.repository.concurrency import ConcurrencyManager
 from app.repository.github import GitHubClient, github_client_from_settings
 from app.repository.retrieval import RetrievalService
-from app.repository.runner import RunnerDependencies, run_analysis_to_index
+from app.repository.runner import RunnerDependencies
 from app.repository.workspace import WorkspaceManager
 
 _session_factory: sessionmaker[Session] | None = None
@@ -110,6 +111,6 @@ def get_analysis_dispatcher(background_tasks: BackgroundTasks) -> AnalysisDispat
     """
 
     def dispatch(analysis_id: str, deps: RunnerDependencies) -> None:
-        background_tasks.add_task(run_analysis_to_index, analysis_id=analysis_id, deps=deps)
+        background_tasks.add_task(run_analysis_pipeline, analysis_id=analysis_id, deps=deps)
 
     return dispatch
