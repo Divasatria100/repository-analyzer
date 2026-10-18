@@ -151,6 +151,11 @@ describe("router fallbacks", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Analysis in progress" })).toBeDefined();
     });
+    // The live terminal restates the same server state; it fabricates nothing.
+    expect(screen.getByRole("heading", { name: "Analysis terminal" })).toBeDefined();
+    const log = screen.getByRole("log");
+    expect(log.textContent).toContain("Analysis accepted");
+    expect(log.textContent).toContain("Queued");
   });
 
   it("renders Not Found for unknown routes", () => {

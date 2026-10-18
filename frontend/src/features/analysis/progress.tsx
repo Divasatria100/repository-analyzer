@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Link } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ApiRequestError, getAnalysis } from "../../lib/api";
@@ -9,33 +9,19 @@ import {
   type AnalysisDetail,
 } from "../../schemas/analysis";
 import { Alert, EmptyState, LoadingState, Panel, StatusBadge } from "../../components/ui";
+import { AnalysisTerminal } from "./AnalysisTerminal";
+import { stageLabel } from "./terminalLog";
 
 // Analysis progress (docs/14-ui-requirements.md, Section 7.4; docs/17 §4.2).
 // Truthful by construction: the stage list comes from the contract, the
 // current stage comes from the server, and there is no percentage, no
 // estimate, and no simulated motion. Polling is bounded and stops on unmount,
-// on terminal states, and after POLL_BUDGET_MS with a manual Refresh.
+// on terminal states, and after POLL_BUDGET_MS with a manual Refresh. The
+// live terminal below restates the same server state as a log; it adds no
+// events the backend did not report.
 
-const POLL_INTERVAL_MS = 3000;
+const POLL_INTERVAL_MS = 1500;
 const POLL_BUDGET_MS = 10 * 60 * 1000;
-
-const STAGE_LABELS: Record<string, string> = {
-  Queued: "Queued",
-  ValidatingRepository: "Validating repository",
-  ResolvingCommit: "Resolving commit",
-  RetrievingRepository: "Retrieving repository",
-  IndexingFiles: "Indexing files",
-  DetectingLanguages: "Detecting languages",
-  ParsingSource: "Parsing source",
-  BuildingCodeModel: "Building code model",
-  RunningAnalysis: "Running analysis",
-  AggregatingResults: "Aggregating results",
-  GeneratingReports: "Generating reports",
-};
-
-function stageLabel(stage: string): string {
-  return STAGE_LABELS[stage] ?? stage;
-}
 
 function shortSha(sha: string): string {
   return sha.length > 7 ? sha.slice(0, 7) : sha;
@@ -150,29 +136,34 @@ export function AnalysisProgress({ analysisId }: { analysisId: string }) {
     }
   }, [data?.status.outcome]);
 
-  if (isLoading) {
-    return <LoadingState label="Loading analysis status…" />;
+  // A missing analysis is not a running one: no terminal is shown for it.
+  if (error instanceof ApiRequestError && error.code === "ANALYSIS_NOT_FOUND") {
+    return (
+      <Panel>
+        <Alert tone="error" title="Analysis not found.">
+          <p>
+            No analysis with this identifier exists. It may have been removed, or the
+            link may be wrong.
+          </p>
+        </Alert>
+      </Panel>
+    );
   }
 
-  if (error) {
+  let state: ReactNode;
+  if (isLoading) {
+    state = <LoadingState label="Loading analysis status…" />;
+  } else if (error) {
     const apiError = error instanceof ApiRequestError ? error : null;
-    if (apiError?.code === "ANALYSIS_NOT_FOUND") {
-      return (
-        <Panel>
-          <Alert tone="error" title="Analysis not found.">
-            <p>
-              No analysis with this identifier exists. It may have been removed, or the
-              link may be wrong.
-            </p>
-          </Alert>
-        </Panel>
-      );
-    }
-    return (
+    state = (
       <Panel>
         <Alert tone="error" title="Could not load the analysis status.">
           <p>{apiError?.message ?? "An unexpected error occurred. Try again."}</p>
         </Alert>
+        <p className="mt-2 text-sm text-text-secondary">
+          The last confirmed status is kept below; one failed request does not mean
+          the analysis failed.
+        </p>
         <button
           type="button"
           onClick={() => void refetch()}
@@ -183,105 +174,112 @@ export function AnalysisProgress({ analysisId }: { analysisId: string }) {
         </button>
       </Panel>
     );
-  }
-
-  if (!data) {
-    return (
+  } else if (!data) {
+    state = (
       <Panel>
         <EmptyState title="No analysis data.">
           <p>The backend returned an empty response. Try refreshing.</p>
         </EmptyState>
       </Panel>
     );
-  }
-
-  const { status } = data;
-  const outcome = status.outcome;
-
-  if (outcome === "Failed") {
-    return (
-      <Panel>
-        <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-lg font-semibold">Analysis failed</h2>
-          <StatusBadge label="Failed" tone="error" marker="✕" />
-        </div>
-        <div className="mt-4">
-          <RepositoryLine detail={data} />
-        </div>
-        <div className="mt-4">
-          <Alert tone="error" title="The analysis did not produce usable results.">
-            {status.explanation ? <p>{status.explanation}</p> : null}
-          </Alert>
-        </div>
-        <p className="mt-4 text-sm text-text-secondary">
-          You can submit the repository again from{" "}
-          <Link className="text-primary underline" to={ROUTES.analysisNew}>
-            New Analysis
+  } else {
+    const { status } = data;
+    const outcome = status.outcome;
+    if (outcome === "Failed") {
+      state = (
+        <Panel>
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-lg font-semibold">Analysis failed</h2>
+            <StatusBadge label="Failed" tone="error" marker="✕" />
+          </div>
+          <div className="mt-4">
+            <RepositoryLine detail={data} />
+          </div>
+          <div className="mt-4">
+            <Alert tone="error" title="The analysis did not produce usable results.">
+              {status.explanation ? <p>{status.explanation}</p> : null}
+            </Alert>
+          </div>
+          <p className="mt-4 text-sm text-text-secondary">
+            You can submit the repository again from{" "}
+            <Link className="text-primary underline" to={ROUTES.analysisNew}>
+              New Analysis
+            </Link>
+            .
+          </p>
+        </Panel>
+      );
+    } else if (outcome != null && isTerminalOutcome(outcome)) {
+      const target = ROUTES.analysisOverview(analysisId);
+      state = (
+        <Panel>
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-lg font-semibold">
+              {outcome === "Completed with limitations"
+                ? "Analysis completed with limitations"
+                : "Analysis completed"}
+            </h2>
+            <StatusBadge
+              label={outcome}
+              tone={outcome === "Completed with limitations" ? "warning" : "neutral"}
+              marker={outcome === "Completed with limitations" ? "▲" : "–"}
+            />
+          </div>
+          <div className="mt-4">
+            <RepositoryLine detail={data} />
+          </div>
+          {status.explanation ? (
+            <p className="mt-4 text-sm text-text-secondary">{status.explanation}</p>
+          ) : null}
+          <Link
+            to={target}
+            className="mt-6 inline-block rounded-control bg-primary px-4 py-2 text-sm font-semibold text-background hover:brightness-110"
+          >
+            Open analysis
           </Link>
-          .
-        </p>
-      </Panel>
-    );
+        </Panel>
+      );
+    } else {
+      // Non-terminal: honest waiting state. The backend may not advance beyond
+      // Queued until the orchestrator exists; nothing here implies otherwise.
+      const stage = status.stage ?? "Queued";
+      state = (
+        <Panel>
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-lg font-semibold">Analysis in progress</h2>
+            <StatusBadge label={stageLabel(stage)} tone="info" marker="●" />
+          </div>
+          <div className="mt-4">
+            <RepositoryLine detail={data} />
+          </div>
+          <p className="mt-4 text-sm text-text-secondary" aria-live="polite">
+            {stage === "Queued"
+              ? "The request has been accepted and is awaiting processing. Results will appear once the backend completes the analysis."
+              : `The backend reports stage ${stageLabel(stage)}. Results will appear once the analysis completes.`}
+          </p>
+          <StageList currentStage={stage} />
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            disabled={isFetching}
+            className="mt-6 rounded-control border border-border px-4 py-2 text-sm font-medium text-text-primary hover:border-primary disabled:opacity-50"
+          >
+            {isFetching ? "Refreshing…" : "Refresh now"}
+          </button>
+        </Panel>
+      );
+    }
   }
 
-  if (outcome != null && isTerminalOutcome(outcome)) {
-    const target = ROUTES.analysisOverview(analysisId);
-    return (
-      <Panel>
-        <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-lg font-semibold">
-            {outcome === "Completed with limitations"
-              ? "Analysis completed with limitations"
-              : "Analysis completed"}
-          </h2>
-          <StatusBadge
-            label={outcome}
-            tone={outcome === "Completed with limitations" ? "warning" : "neutral"}
-            marker={outcome === "Completed with limitations" ? "▲" : "–"}
-          />
-        </div>
-        <div className="mt-4">
-          <RepositoryLine detail={data} />
-        </div>
-        {status.explanation ? (
-          <p className="mt-4 text-sm text-text-secondary">{status.explanation}</p>
-        ) : null}
-        <Link
-          to={target}
-          className="mt-6 inline-block rounded-control bg-primary px-4 py-2 text-sm font-semibold text-background hover:brightness-110"
-        >
-          Open analysis
-        </Link>
-      </Panel>
-    );
-  }
-
-  // Non-terminal: honest waiting state. The backend may not advance beyond
-  // Queued until the orchestrator exists; nothing here implies otherwise.
-  const stage = status.stage ?? "Queued";
   return (
-    <Panel>
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-lg font-semibold">Analysis in progress</h2>
-        <StatusBadge label={stageLabel(stage)} tone="info" marker="●" />
-      </div>
-      <div className="mt-4">
-        <RepositoryLine detail={data} />
-      </div>
-      <p className="mt-4 text-sm text-text-secondary" aria-live="polite">
-        {stage === "Queued"
-          ? "The request has been accepted and is awaiting processing. Results will appear once the backend completes the analysis."
-          : `The backend reports stage ${stageLabel(stage)}. Results will appear once the analysis completes.`}
-      </p>
-      <StageList currentStage={stage} />
-      <button
-        type="button"
-        onClick={() => void refetch()}
-        disabled={isFetching}
-        className="mt-6 rounded-control border border-border px-4 py-2 text-sm font-medium text-text-primary hover:border-primary disabled:opacity-50"
-      >
-        {isFetching ? "Refreshing…" : "Refresh now"}
-      </button>
-    </Panel>
+    <div className="space-y-6">
+      {state}
+      <AnalysisTerminal
+        analysisId={analysisId}
+        detail={data}
+        error={error}
+        isFetching={isFetching}
+      />
+    </div>
   );
 }

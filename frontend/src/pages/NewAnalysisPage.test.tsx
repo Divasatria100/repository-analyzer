@@ -65,6 +65,41 @@ describe("New Analysis form", () => {
     expect(window.localStorage.getItem("repolens-dashboard-repository")).toBe("r1");
   });
 
+  it("displays the live terminal after a successful submission", async () => {
+    const detail = {
+      analysis: { analysis_id: "abc123", repository_id: "r1", timestamp: "2026-09-29T08:15:42Z" },
+      repository: {
+        repository_id: "r1",
+        url: "https://github.com/acme/web",
+        owner: "acme",
+        name: "web",
+        analyzed_state: { branch: null, commit: null },
+      },
+      status: { stage: "Queued", outcome: null, explanation: null, completed_at: null },
+    };
+    window.fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      const isPost = init?.method === "POST";
+      return Promise.resolve({
+        ok: true,
+        status: isPost ? 202 : 200,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify(
+              isPost ? { analysis_id: "abc123", repository_id: "r1", stage: "Queued" } : detail,
+            ),
+          ),
+      } as Response);
+    }) as unknown as typeof fetch;
+
+    renderAt("/analysis/new");
+    fillUrl("https://github.com/acme/web");
+    submit();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Analysis terminal" })).toBeDefined();
+      expect(screen.getByRole("log").textContent).toContain("Analysis accepted");
+    });
+  });
+
   it("sends null branch/commit when left empty", async () => {
     mockFetchOnce({ analysis_id: "a", repository_id: "r", stage: "Queued" }, 202);
     renderAt("/analysis/new");
