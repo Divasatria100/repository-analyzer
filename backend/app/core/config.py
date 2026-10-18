@@ -186,6 +186,41 @@ class WorkspaceSettings(BaseModel):
         return Path(base).expanduser().resolve()
 
 
+class CorsSettings(BaseModel):
+    """Browser origins allowed to call the API from a different origin.
+
+    A development allow-list only: explicit origins, never a wildcard, and
+    no credentials (docs/15 §9.1 treats allow-lists as trusted internal
+    configuration). Defaults cover the local Vite dev server and the
+    alternate ports used during development.
+    """
+
+    allow_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://localhost:5174",
+            "http://localhost:5175",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
+            "http://127.0.0.1:5175",
+        ],
+        description="Allowed CORS origins. Explicit only; a wildcard is rejected.",
+    )
+
+    @field_validator("allow_origins")
+    @classmethod
+    def _validate_origins(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for origin in value:
+            candidate = origin.strip()
+            if not candidate:
+                raise ValueError("CORS origins must be non-empty strings")
+            if "*" in candidate:
+                raise ValueError("CORS origins must be explicit; wildcard '*' is not allowed")
+            cleaned.append(candidate)
+        return cleaned
+
+
 class Settings(BaseSettings):
     """Root settings. Read once at startup; invalid values fail closed."""
 
@@ -206,6 +241,7 @@ class Settings(BaseSettings):
     operational: OperationalSettings = Field(default_factory=OperationalSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
+    cors: CorsSettings = Field(default_factory=CorsSettings)
 
     def describe(self) -> dict[str, Any]:
         """Operator-inspectable view of effective values (SECISO-907)."""

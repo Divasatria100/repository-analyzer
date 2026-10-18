@@ -12,6 +12,7 @@ Run locally::
 import logging
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from app.api.analyses import router as analyses_router
@@ -54,6 +55,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application = FastAPI(title=active.application.name, version=active.application.version)
     application.state.settings = active
     install_error_handlers(application)
+    # Browser CORS for the local frontend. Explicit origin allow-list, no
+    # credentials, and only the methods/headers the API actually uses; the
+    # allow-list defaults live in ``CorsSettings`` (never a wildcard).
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=active.cors.allow_origins,
+        allow_methods=["GET", "POST"],
+        allow_headers=["content-type"],
+        allow_credentials=False,
+    )
     application.include_router(health_router, prefix=API_PREFIX)
     application.include_router(analyses_router, prefix=API_PREFIX)
     application.include_router(repositories_router, prefix=API_PREFIX)

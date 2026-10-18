@@ -213,3 +213,22 @@ def test_startup_failure_hides_database_secret(monkeypatch: pytest.MonkeyPatch) 
     report = str(exc_info.value.code)
     assert "hunter2" not in report
     assert "Invalid configuration" in report
+
+
+def test_cors_default_origins_include_local_frontend() -> None:
+    settings = load_settings()
+    assert "http://localhost:5173" in settings.cors.allow_origins
+    assert "http://127.0.0.1:5173" in settings.cors.allow_origins
+    assert all("*" not in origin for origin in settings.cors.allow_origins)
+
+
+def test_cors_wildcard_origin_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REPOLENS_CORS__ALLOW_ORIGINS", '["*"]')
+    with pytest.raises(ValidationError):
+        load_settings()
+
+
+def test_cors_origins_are_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REPOLENS_CORS__ALLOW_ORIGINS", '["http://localhost:6000"]')
+    settings = load_settings()
+    assert settings.cors.allow_origins == ["http://localhost:6000"]
