@@ -251,8 +251,14 @@ export function NewAnalysisPage() {
             aria-busy={pending}
             className="mt-6 rounded-control bg-primary px-5 py-2.5 text-sm font-semibold text-background hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {pending ? "Starting analysis…" : "Start Analysis"}
+            {pending ? "Submitting…" : "Start Analysis"}
           </button>
+          {pending ? (
+            <p role="status" aria-live="polite" className="mt-3 text-sm text-text-secondary">
+              Submitting your request. The analysis has not started yet; the live
+              terminal opens on the analysis page as soon as the repository is accepted.
+            </p>
+          ) : null}
         </form>
       </Panel>
     </div>

@@ -65,7 +65,19 @@ describe("New Analysis form", () => {
     expect(window.localStorage.getItem("repolens-dashboard-repository")).toBe("r1");
   });
 
-  it("displays the live terminal after a successful submission", async () => {
+  it("shows a truthful submission state before the response returns", () => {
+    // The request never settles: no analysis id exists yet, so no terminal.
+    window.fetch = vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+    renderAt("/analysis/new");
+    fillUrl("https://github.com/acme/web");
+    submit();
+    expect(screen.getByRole("button", { name: "Submitting…" })).toBeDefined();
+    expect(screen.queryByText(/starting analysis/i)).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Analysis terminal" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("has not started yet");
+  });
+
+  it("navigates to the returned analysis id and shows the live terminal", async () => {
     const detail = {
       analysis: { analysis_id: "abc123", repository_id: "r1", timestamp: "2026-09-29T08:15:42Z" },
       repository: {
@@ -91,13 +103,24 @@ describe("New Analysis form", () => {
       } as Response);
     }) as unknown as typeof fetch;
 
-    renderAt("/analysis/new");
+    const router = renderAt("/analysis/new");
     fillUrl("https://github.com/acme/web");
     submit();
+    // 1) navigation uses the returned identifier.
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Analysis terminal" })).toBeDefined();
-      expect(screen.getByRole("log").textContent).toContain("Analysis accepted");
+      expect(router.state.location.pathname).toBe("/analysis/abc123");
     });
+    // 2) the terminal is visible on the rendered status page while queued.
+    await waitFor(() => {
+      const log = screen.getByRole("log");
+      expect(screen.getByRole("heading", { name: "Analysis terminal" })).toBeDefined();
+      expect(log.textContent).toContain("Analysis accepted");
+      expect(log.textContent).toContain("Queued");
+    });
+    // The terminal is a real dark, monospaced surface.
+    const panel = screen.getByRole("heading", { name: "Analysis terminal" }).closest("section");
+    expect(panel?.className).toContain("font-mono");
+    expect(panel?.className).toContain("bg-secondary");
   });
 
   it("sends null branch/commit when left empty", async () => {
