@@ -507,3 +507,61 @@ def test_pipeline_domain_failure_is_isolated_and_sealed(
         assert states["dependency"] != "No findings detected"
     finally:
         engine.dispose()
+
+
+def test_full_workflow_submission_results_reports_history_comparison(tmp_path: Path) -> None:
+    """TASK-251: the real pipeline connects submission, persisted results,
+    reports, history, and comparison for two analyses of one repository."""
+    engine, factory = _factory()
+    try:
+        recorder: _Recorder = _Recorder()
+        source = tmp_path / "source"
+        head = init_git_repo(source, FIXTURE_FILES)
+        client = _slice_client(factory, _github(head), recorder, tmp_path / "workspaces")
+        first = _seed_post(factory, client)
+        second = _seed_post(factory, client)
+        assert first["repository_id"] == second["repository_id"]
+
+        for created in (first, second):
+            run_analysis_pipeline(
+                analysis_id=created["analysis_id"],
+                deps=_pipeline_deps(factory, head, tmp_path / "workspaces"),
+                remote_url_override=str(source),
+                allow_local_paths=True,
+                source_provider=DictSourceProvider(_SUPPORTED_SOURCE),
+            )
+            state = _analysis_state(factory, created["analysis_id"])
+            assert state.outcome in ("Completed", "Completed with limitations")
+            assert _count(factory, AnalysisSnapshot, created["analysis_id"]) == 1
+            assert list((tmp_path / "workspaces").glob("ws-*")) == []
+
+        # History exposes both analyses of the shared repository, newest first.
+        history = client.get(f"/api/repositories/{first['repository_id']}").json()
+        assert {entry["analysis_id"] for entry in history["analyses"]} == {
+            first["analysis_id"],
+            second["analysis_id"],
+        }
+        assert all(
+            entry["outcome"] in ("Completed", "Completed with limitations")
+            for entry in history["analyses"]
+        )
+
+        # Comparison links the two sealed results: identical inputs → unchanged.
+        comparison = client.get(
+            f"/api/analyses/{second['analysis_id']}?comparison_base={first['analysis_id']}"
+        ).json()["comparison"]
+        assert comparison["comparable"] is True
+        assert comparison["new"] == [] and comparison["resolved"] == []
+        assert len(comparison["unchanged"]) >= 1
+
+        # Report: canonical JSON equals the §4.2 result; markdown/html render it.
+        json_report = client.get(f"/api/analyses/{second['analysis_id']}/report?format=json")
+        assert json_report.status_code == 200, json_report.text
+        assert json_report.json() == client.get(f"/api/analyses/{second['analysis_id']}").json()
+        for fmt, content_type in (("markdown", "text/markdown"), ("html", "text/html")):
+            report = client.get(f"/api/analyses/{second['analysis_id']}/report?format={fmt}")
+            assert report.status_code == 200, report.text
+            assert report.headers["content-type"] == content_type
+            assert history["name"] in report.text
+    finally:
+        engine.dispose()

@@ -18,8 +18,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 import app.reports.html as html_module
-from app.api.deps import get_db, get_github_client, reset_session_factory
-from app.core.config import Settings
+from app.api.deps import get_db, get_github_client, get_settings_dep, reset_session_factory
+from app.core.config import OperationalSettings, Settings
 from app.core.database import create_session_factory, session_scope
 from app.main import create_app
 from app.models.base import Base
@@ -231,5 +231,56 @@ def test_workspace_changes_do_not_alter_reports() -> None:
         after = client.get(f"/api/analyses/{analysis_id}/report?format=json").json()
         assert before == after
         assert COMMIT_SHA in after["repository"]["analyzed_state"]["commit"]["sha"]
+    finally:
+        engine.dispose()
+
+
+def test_report_size_limit_marks_unavailable_and_preserves_results(
+    monkeypatch,  # noqa: ANN001 - pytest fixture
+) -> None:
+    """docs/15 §9.1: an over-limit rendered report is REPORT_UNAVAILABLE with
+    a reason naming the limit, while the canonical result is preserved."""
+    engine, factory = _factory()
+    try:
+        reset_session_factory()
+        application = create_app(Settings(environment="test"))
+        bounded = Settings(
+            environment="test",
+            operational=OperationalSettings(report_max_size_mb=5),
+        )
+
+        def override_db():
+            with session_scope(factory) as session:
+                yield session
+
+        application.dependency_overrides[get_db] = override_db
+        application.dependency_overrides[get_settings_dep] = lambda: bounded
+        client = TestClient(application, raise_server_exceptions=False)
+        with session_scope(factory) as session:
+            _, analysis_id = _seed_completed(session)
+        baseline = client.get(f"/api/analyses/{analysis_id}/report?format=json").json()
+
+        # A render exactly at the limit still serves; one byte over is rejected.
+        limit = 5 * 1024 * 1024
+        monkeypatch.setattr("app.api.analyses.render_markdown", lambda _result: "m" * limit)
+        at_limit = client.get(f"/api/analyses/{analysis_id}/report?format=markdown")
+        assert at_limit.status_code == 200, at_limit.text
+        assert len(at_limit.text) == limit
+
+        monkeypatch.setattr("app.api.analyses.render_markdown", lambda _result: "m" * (limit + 1))
+        monkeypatch.setattr("app.api.analyses.render_html", lambda _result: "h" * (limit + 1))
+        for fmt in ("markdown", "html"):
+            error = _envelope(
+                client.get(f"/api/analyses/{analysis_id}/report?format={fmt}"),
+                "REPORT_UNAVAILABLE",
+                404,
+            )
+            assert "size limit" in error["message"]
+
+        # Results are preserved: the canonical JSON report is byte-identical
+        # and the sealed snapshot is untouched.
+        assert client.get(f"/api/analyses/{analysis_id}/report?format=json").json() == baseline
+        with session_scope(factory) as session:
+            assert get_snapshot(session, analysis_id) is not None
     finally:
         engine.dispose()

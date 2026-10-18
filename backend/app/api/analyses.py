@@ -291,8 +291,16 @@ def get_report(
     analysis_id: str,
     format: str = _format_query,
     session: Session = _db,
+    settings: Settings = _settings,
 ) -> Response:
-    """Consolidated report derived from the canonical result (§4.6)."""
+    """Consolidated report derived from the canonical result (§4.6).
+
+    Rendered reports (markdown/html) are bounded by ``report.max_size_mb``
+    (docs/15 §9.1): an over-limit render is REPORT_UNAVAILABLE with a reason
+    while the canonical JSON result is preserved. JSON is the canonical
+    result itself (identical to §4.2), never a "rendered report", so it is
+    not size-capped.
+    """
     if format not in ("json", "markdown", "html"):
         raise ApiError("VALIDATION_ERROR", "Unknown report format. Use json, markdown, or html.")
     analysis = get_analysis_or_404(session, analysis_id)
@@ -306,13 +314,24 @@ def get_report(
         return JSONResponse(content=result)
     if format == "markdown":
         return Response(
-            content=render_markdown(result),
+            content=_bounded_report(render_markdown(result), settings),
             headers={"content-type": "text/markdown"},
         )
     return Response(
-        content=render_html(result),
+        content=_bounded_report(render_html(result), settings),
         headers={"content-type": "text/html"},
     )
+
+
+def _bounded_report(content: str, settings: Settings) -> str:
+    """Reject an over-limit rendered report (docs/15 §9.1, SECISO-901/904)."""
+    limit_bytes = settings.operational.report_max_size_mb * 1024 * 1024
+    if len(content.encode("utf-8")) > limit_bytes:
+        raise ApiError(
+            "REPORT_UNAVAILABLE",
+            "The rendered report exceeds the configured size limit and is unavailable.",
+        )
+    return content
 
 
 def _comparison(session: Session, analysis_id: str, base_id: str) -> dict[str, object] | None:
