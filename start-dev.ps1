@@ -13,9 +13,19 @@
   - Tidak menjalankan kode dari repository GitHub yang dianalisis RepoLens;
     script ini hanya menjalankan layanan RepoLens sendiri.
   - Tidak menimpa file .env dan tidak menampilkan isi .env/secret.
-  - Tidak mematikan proses lain: port yang sudah dipakai dilaporkan sebagai
-    error (proses pemilik port tidak disentuh).
+  - Safe restart: bila sesi RepoLens sebelumnya (diluncurkan script ini) masih
+    aktif, prosesnya dihentikan SETELAH diverifikasi milik RepoLens
+    (PID + image + waktu mulai + command line), lalu script menunggu proses
+    berhenti dan port tersedia sebelum memulai sesi baru. Bila sebuah proses
+    tidak dapat diverifikasi atau tidak dapat dihentikan dengan aman, script
+    berhenti dengan FAIL tanpa menyentuh proses asing.
+  - Tidak mematikan proses lain: proses pemilik port yang tidak terverifikasi
+    milik RepoLens dilaporkan sebagai error dan tidak disentuh.
   - Hentikan dengan Ctrl+C — hanya proses milik script yang dihentikan.
+
+  State sesi disimpan di direktori temp (per-repo, tidak mengotori repo).
+  Variabel lingkungan REPOLENS_DEV_STATE_FILE dapat menunjuk lokasi state lain
+  (mis. untuk pengujian); verifikasi kepemilikan tetap berlaku.
 
   Backend Python dipilih dari backend/.venv bila tersedia. Bila tidak, script
   memakai `python` di PATH secara EKSPLISIT dan tetap memvalidasi versi Python
@@ -32,6 +42,10 @@
 .PARAMETER ReadyTimeoutSec
   Batas waktu tunggu kesiapan tiap layanan, dalam detik (default 90, minimum 5).
 
+.PARAMETER StopTimeoutSec
+  Batas waktu tunggu agar proses sesi sebelumnya berhenti dan port menjadi
+  bebas sebelum sesi baru dimulai, dalam detik (default 20, minimum 1).
+
 .PARAMETER SkipFrontend
   Jangan jalankan frontend.
 
@@ -44,6 +58,7 @@
   .\start-dev.ps1 -SkipBackend
   .\start-dev.ps1 -SkipFrontend
   .\start-dev.ps1 -ReadyTimeoutSec 30
+  .\start-dev.ps1 -StopTimeoutSec 10
 #>
 
 [CmdletBinding()]
@@ -52,6 +67,8 @@ param(
   [int]$BackendPort = 8000,
   [ValidateRange(5, 600)]
   [int]$ReadyTimeoutSec = 90,
+  [ValidateRange(1, 300)]
+  [int]$StopTimeoutSec = 20,
   [switch]$SkipFrontend,
   [switch]$SkipBackend
 )
@@ -67,9 +84,14 @@ $FrontendUrl = "http://localhost:$FrontendPort"
 $BackendUrl = "http://localhost:$BackendPort"
 $BackendHealthUrl = "$BackendUrl/api/health"
 
-# Proses yang diluncurkan script ini: nama, PID, dan image saat diluncurkan
-# (image dipakai sebagai pengaman terhadap PID reuse sebelum dihentikan).
-$script:children = @()
+# Sesi RepoLens: record proses yang diluncurkan script ini (nama, PID, image,
+# waktu mulai, command line). State ini dimuat dari sesi sebelumnya dan
+# diperbarui setiap kali proses diluncurkan, sehingga sesi baru dapat
+# mengidentifikasi dan menghentikan proses RepoLens yang masih tertinggal.
+# Image, waktu mulai, dan command line dipakai untuk memverifikasi kepemilikan
+# serta sebagai pengaman terhadap PID reuse sebelum proses dihentikan.
+$script:Session = @()
+$script:StateFilePath = $null
 
 function Write-Check([string]$Message) { Write-Host "  [CHECK] $Message" -ForegroundColor Gray }
 function Write-Start([string]$Message) { Write-Host "  [START] $Message" -ForegroundColor Cyan }
@@ -153,28 +175,263 @@ function Wait-EndpointReady {
   return [pscustomobject]@{ State = "Timeout" }
 }
 
-function Stop-OwnProcesses {
-  # Hanya menghentikan proses yang diluncurkan script ini (tree milik PID
-  # tersebut). Proses lain di port yang sama TIDAK disentuh. Image name
-  # diverifikasi agar PID yang sudah dipakai ulang oleh proses lain tidak
-  # ikut dihentikan.
-  if ($script:children.Count -eq 0) { return }
-  foreach ($child in $script:children) {
-    try {
-      $process = Get-Process -Id $child.Pid -ErrorAction SilentlyContinue
-      if ($process -eq $null) { continue }
-      if ($process.ProcessName -ne $child.Image) {
-        Write-WarnMsg "PID $($child.Pid) kini milik '$($process.ProcessName)', bukan '$($child.Image)' — dilewati."
-        continue
-      }
-      Write-Detail "Menghentikan $($child.Name) (PID $($child.Pid))..."
-      & taskkill /PID $child.Pid /T /F 2>$null | Out-Null
-    } catch {
-      # Proses sudah berhenti sendiri — tidak masalah.
+function Get-SessionStatePath {
+  # Path state sesi stabil per-repo, disimpan di direktori temp (bukan di repo)
+  # supaya tidak mengotori working tree. Repo yang sama selalu memakai path
+  # yang sama, sehingga sesi berikutnya dapat menemukan sesi sebelumnya.
+  # REPOLENS_DEV_STATE_FILE dapat dipakai untuk memindahkan lokasi state
+  # (mis. pengujian) tanpa mengubah perilaku verifikasi kepemilikan.
+  if (-not [string]::IsNullOrWhiteSpace($env:REPOLENS_DEV_STATE_FILE)) {
+    return $env:REPOLENS_DEV_STATE_FILE
+  }
+  $root = $RepoRoot
+  if ([string]::IsNullOrWhiteSpace($root)) { $root = (Get-Location).Path }
+  $sha = [System.Security.Cryptography.SHA1]::Create()
+  try {
+    $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($root.ToLowerInvariant()))
+  } finally {
+    $sha.Dispose()
+  }
+  $hex = -join ($bytes | ForEach-Object { $_.ToString("x2") })
+  return (Join-Path ([System.IO.Path]::GetTempPath()) "repolens-dev-$($hex.Substring(0, 16)).session.json")
+}
+
+function Get-SessionRecords {
+  # Normalisasi daftar record sesi (aman terhadap $null maupun record tunggal).
+  # Pemanggil selalu membungkus hasilnya dengan @(...) agar .Count andal
+  # meskipun hanya ada satu record.
+  return @($script:Session | Where-Object { $null -ne $_ })
+}
+
+function Read-SessionState {
+  # State sesi tidak dianggap sebagai sumber kebenaran tunggal: setiap record
+  # tetap diverifikasi ulang (identitas proses) sebelum dipakai.
+  $path = $script:StateFilePath
+  if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) { return @() }
+  try {
+    $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+    $parsed = ConvertFrom-Json -InputObject $raw -ErrorAction Stop
+    if ($null -eq $parsed) { return @() }
+    return @($parsed)
+  } catch {
+    Write-WarnMsg "State sesi sebelumnya tidak dapat dibaca ($path) — diabaikan."
+    return @()
+  }
+}
+
+function Save-SessionState {
+  # Tulis state sesi; bila tidak ada record tersisa, state dihapus.
+  $path = $script:StateFilePath
+  if ([string]::IsNullOrWhiteSpace($path)) { return }
+  $records = @(Get-SessionRecords)
+  try {
+    if ($records.Count -eq 0) {
+      if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+      return
+    }
+    $json = ConvertTo-Json -InputObject ([object[]]$records) -Depth 6
+    Set-Content -LiteralPath $path -Value $json -Encoding UTF8 -ErrorAction Stop
+  } catch {
+    Write-WarnMsg "State sesi tidak dapat disimpan ($path): $($_.Exception.Message)"
+  }
+}
+
+function Get-ProcessIdentity {
+  param([int]$ProcessId)
+  # Identitas proses untuk verifikasi kepemilikan + pengaman PID reuse.
+  # $null berarti proses tidak ada (atau identitasnya tidak dapat dibaca).
+  $cim = $null
+  try {
+    $cim = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction Stop
+  } catch {
+    return $null
+  }
+  if ($null -eq $cim) { return $null }
+  $ticks = $null
+  try { $ticks = $cim.CreationDate.Ticks } catch { $ticks = $null }
+  return [pscustomobject]@{
+    Pid         = [int]$cim.ProcessId
+    Image       = $cim.Name
+    StartTicks  = $ticks
+    CommandLine = $cim.CommandLine
+  }
+}
+
+function Test-ProcessRecordMatches {
+  param($Record, $Identity)
+  # Verifikasi bahwa PID pada record masih menunjuk proses yang SAMA, bukan
+  # hasil PID reuse: image, waktu mulai (ticks), dan command line harus cocok.
+  # Bila identitas tidak lengkap, record dianggap TIDAK terverifikasi (fail-safe).
+  if ($null -eq $Record -or $null -eq $Identity) { return $false }
+  if ([int]$Record.Pid -ne [int]$Identity.Pid) { return $false }
+  if ([string]::IsNullOrWhiteSpace($Record.Image) -or [string]$Record.Image -ne [string]$Identity.Image) { return $false }
+  if ($null -eq $Record.StartTicks -or $null -eq $Identity.StartTicks) { return $false }
+  if ([string]$Record.StartTicks -ne [string]$Identity.StartTicks) { return $false }
+  if (-not [string]::IsNullOrWhiteSpace($Record.CommandLine) -and
+      -not [string]::IsNullOrWhiteSpace($Identity.CommandLine) -and
+      $Record.CommandLine -ne $Identity.CommandLine) {
+    return $false
+  }
+  return $true
+}
+
+function New-SessionRecord {
+  param(
+    [string]$Name,
+    [System.Diagnostics.Process]$Process
+  )
+  # Rekam identitas proses yang baru diluncurkan. Identitas dibaca beberapa
+  # kali karena proses (mis. wrapper npm) baru terbaca setelah beberapa saat.
+  $identity = $null
+  for ($attempt = 0; $attempt -lt 10 -and $null -eq $identity; $attempt++) {
+    $identity = Get-ProcessIdentity -ProcessId $Process.Id
+    if ($null -eq $identity) { Start-Sleep -Milliseconds 100 }
+  }
+  if ($null -eq $identity) {
+    $identity = [pscustomobject]@{ Pid = $Process.Id; Image = $Process.ProcessName; StartTicks = $null; CommandLine = $null }
+  }
+  return [pscustomobject]@{
+    Name        = $Name
+    Pid         = [int]$identity.Pid
+    Image       = $identity.Image
+    StartTicks  = $identity.StartTicks
+    CommandLine = $identity.CommandLine
+  }
+}
+
+function Get-SessionRestartPlan {
+  # Klasifikasi record sesi sebelumnya: Verified (masih proses yang sama),
+  # Stale (PID sudah dipakai proses lain), Gone (sudah berhenti).
+  $verified = @()
+  $stale = @()
+  $gone = @()
+  foreach ($record in @(Get-SessionRecords)) {
+    $identity = Get-ProcessIdentity -ProcessId $record.Pid
+    if ($null -eq $identity) { $gone += $record; continue }
+    if (Test-ProcessRecordMatches -Record $record -Identity $identity) {
+      $verified += $record
+    } else {
+      $stale += $record
     }
   }
-  $script:children = @()
+  return [pscustomobject]@{
+    Verified = @($verified)
+    Stale    = @($stale)
+    Gone     = @($gone)
+  }
 }
+
+function Get-PortOwnerProcessIds {
+  param([int]$Port)
+  # Pemilik port hanya untuk PELAPORAN; tidak pernah dipakai sebagai dasar
+  # penghentian proses (kepemilikan harus terverifikasi lewat state sesi).
+  try {
+    $conns = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+  } catch {
+    return @()
+  }
+  if ($null -eq $conns) { return @() }
+  return @($conns | Select-Object -ExpandProperty OwningProcess -Unique)
+}
+
+function Get-PortAvailability {
+  param([int]$Port)
+  if (-not (Test-PortInUse -Port $Port)) {
+    return [pscustomobject]@{ InUse = $false; OwnerPids = @(); OwnerNames = @() }
+  }
+  $ownerPids = @(Get-PortOwnerProcessIds -Port $Port)
+  $ownerNames = @()
+  foreach ($ownerPid in $ownerPids) {
+    $identity = Get-ProcessIdentity -ProcessId $ownerPid
+    if ($null -ne $identity) { $ownerNames += "$($identity.Image) (PID $ownerPid)" } else { $ownerNames += "PID $ownerPid" }
+  }
+  return [pscustomobject]@{ InUse = $true; OwnerPids = @($ownerPids); OwnerNames = @($ownerNames) }
+}
+
+function Stop-ProcessTree {
+  param([int]$ProcessId)
+  # Primitif penghentian (dipisah agar dapat diuji). /T = seluruh tree proses.
+  try {
+    & taskkill /PID $ProcessId /T /F 2>$null | Out-Null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
+}
+
+function Stop-VerifiedProcesses {
+  param([object[]]$Records)
+  # Hentikan HANYA proses yang terverifikasi masih milik RepoLens. Hasil:
+  # daftar record yang TIDAK dapat dihentikan (masih hidup & terverifikasi).
+  $remaining = @()
+  foreach ($record in @($Records)) {
+    if ($null -eq $record) { continue }
+    $identity = Get-ProcessIdentity -ProcessId $record.Pid
+    if ($null -eq $identity) { continue }
+    if (-not (Test-ProcessRecordMatches -Record $record -Identity $identity)) {
+      Write-WarnMsg "PID $($record.Pid) kini milik proses lain ('$($identity.Image)') — tidak dihentikan."
+      continue
+    }
+    Write-Detail "Menghentikan $($record.Name) (PID $($record.Pid))..."
+    if (Stop-ProcessTree -ProcessId $record.Pid) {
+      Write-Detail "$($record.Name) (PID $($record.Pid)) dihentikan."
+    } else {
+      Write-FailMsg "Gagal menghentikan $($record.Name) (PID $($record.Pid))."
+      $remaining += $record
+    }
+  }
+  return @($remaining)
+}
+
+function Wait-ForStop {
+  param([int[]]$ProcessIds, [int[]]$Ports, [int]$TimeoutSec)
+  # Tunggu sampai seluruh proses target benar-benar berhenti DAN port yang
+  # relevan bebas sebelum sesi baru dimulai.
+  $deadline = (Get-Date).AddSeconds($TimeoutSec)
+  while ($true) {
+    $alive = $false
+    foreach ($processId in @($ProcessIds)) {
+      if ($null -ne (Get-ProcessIdentity -ProcessId $processId)) { $alive = $true; break }
+    }
+    if (-not $alive) {
+      $busy = $false
+      foreach ($port in @($Ports)) {
+        if (Test-PortInUse -Port $port) { $busy = $true; break }
+      }
+      if (-not $busy) { return $true }
+    }
+    if ((Get-Date) -ge $deadline) { return $false }
+    Start-Sleep -Milliseconds 250
+  }
+}
+
+function Stop-OwnProcesses {
+  # Hanya menghentikan proses yang terverifikasi masih milik RepoLens (PID,
+  # image, waktu mulai, dan command line cocok). Proses asing TIDAK disentuh.
+  # Record yang gagal dihentikan tetap disimpan di state file agar dapat
+  # dicoba lagi pada sesi berikutnya.
+  $records = @(Get-SessionRecords)
+  if ($records.Count -eq 0) {
+    $script:Session = @()
+    Save-SessionState
+    return
+  }
+  $remaining = @(Stop-VerifiedProcesses -Records $records)
+  $script:Session = @($remaining)
+  Save-SessionState
+}
+
+# Path state sesi RepoLens (dipakai untuk safe restart).
+$script:StateFilePath = Get-SessionStatePath
+
+# Didukung dot-source (mis. oleh test) untuk memuat fungsi tanpa menjalankan
+# seluruh script. Pemanggilan normal ($MyInvocation.InvocationName -ne ".") tetap
+# menjalankan isi script.
+if ($MyInvocation.InvocationName -eq ".") { return }
+
+# Muat state sesi sebelumnya; verifikasi ulang dilakukan sebelum penghentian.
+$script:Session = @(Read-SessionState)
 
 Write-Host "===============================================" -ForegroundColor Cyan
 Write-Host " RepoLens Development Environment" -ForegroundColor Cyan
@@ -329,18 +586,92 @@ if ($wantFrontend) {
   Write-Ok "Frontend dependencies terpasang."
 }
 
+# ---------------- Safe restart: hentikan sesi RepoLens sebelumnya ----------------
+# Hanya proses yang TERVERIFIKASI milik RepoLens (lewat state sesi sebelumnya)
+# yang dihentikan. Proses asing di port yang sama TIDAK pernah disentuh; bila
+# identifikasi/penghentian tidak aman, script berhenti dengan FAIL.
+Write-Check "Previous RepoLens session"
+if (@(Get-SessionRecords).Count -eq 0) {
+  Write-Detail "Tidak ada state sesi RepoLens sebelumnya."
+  Write-Detail "  State: $($script:StateFilePath)"
+  Write-Ok "Tidak ada proses RepoLens sesi sebelumnya yang perlu dihentikan."
+} else {
+  Write-Detail "State : $($script:StateFilePath)"
+  $plan = Get-SessionRestartPlan
+  foreach ($record in @($plan.Stale)) {
+    Write-Detail "PID $($record.Pid) tidak lagi milik '$($record.Name)' (kemungkinan PID reuse) — dilewati."
+  }
+  foreach ($record in @($plan.Gone)) {
+    Write-Detail "$($record.Name) (PID $($record.Pid)) sudah berhenti — dilewati."
+  }
+
+  if (@($plan.Verified).Count -eq 0) {
+    $script:Session = @()
+    Save-SessionState
+    Write-Ok "Tidak ada proses RepoLens sesi sebelumnya yang masih aktif."
+  } else {
+    Write-Wait "Menghentikan $(@($plan.Verified).Count) proses RepoLens sesi sebelumnya"
+    $failed = @(Stop-VerifiedProcesses -Records @($plan.Verified))
+    if ($failed.Count -gt 0) {
+      # Proses terverifikasi milik RepoLens tetapi tidak dapat dihentikan:
+      # berhenti dengan FAIL, jangan menyentuh proses asing, dan simpan state
+      # agar dapat dicoba lagi pada sesi berikutnya.
+      $script:Session = @($failed)
+      Save-SessionState
+      Write-FailMsg "Proses RepoLens sesi sebelumnya tidak dapat dihentikan dengan aman."
+      foreach ($record in $failed) {
+        Write-Detail "$($record.Name) (PID $($record.Pid)) masih berjalan — hentikan manual lalu ulangi."
+      }
+      Write-Detail "Tidak ada proses lain yang disentuh."
+      exit 1
+    }
+
+    $restartPorts = @($FrontendPort, $BackendPort)
+    $cleared = Wait-ForStop -ProcessIds @($plan.Verified | ForEach-Object { [int]$_.Pid }) -Ports $restartPorts -TimeoutSec $StopTimeoutSec
+    if (-not $cleared) {
+      Write-FailMsg "Proses RepoLens sesi sebelumnya belum berhenti / port belum bebas dalam ${StopTimeoutSec} detik."
+      $stillAlive = @($plan.Verified | Where-Object { $null -ne (Get-ProcessIdentity -ProcessId $_.Pid) })
+      if ($stillAlive.Count -gt 0) {
+        $stillAliveText = (@($stillAlive | ForEach-Object { "$($_.Name) (PID $($_.Pid))" }) -join ", ")
+        Write-Detail "Masih berjalan: $stillAliveText."
+      } else {
+        Write-Detail "Semua proses RepoLens sesi sebelumnya sudah berhenti; port kemungkinan dipakai proses lain."
+      }
+      Write-Detail "Tidak ada proses lain yang disentuh. Periksa manual lalu ulangi."
+      exit 1
+    }
+    $script:Session = @()
+    Save-SessionState
+    Write-Ok "Sesi sebelumnya dihentikan; proses berhenti dan port tersedia."
+  }
+}
+
 # ---------------- Cek port (tidak mematikan proses lain) ----------------
 Write-Check "Port availability"
-if ($wantFrontend -and (Test-PortInUse -Port $FrontendPort)) {
-  Write-FailMsg "Port $FrontendPort sudah digunakan proses lain."
-  Write-Detail "Proses pemilik port tidak dihentikan. Ulangi dengan port lain, mis. -FrontendPort 5174."
-  exit 1
+$portBlocked = $false
+if ($wantFrontend) {
+  $frontendAvailability = Get-PortAvailability -Port $FrontendPort
+  if ($frontendAvailability.InUse) {
+    $portBlocked = $true
+    Write-FailMsg "Port $FrontendPort sudah digunakan proses lain."
+    if (@($frontendAvailability.OwnerNames).Count -gt 0) {
+      Write-Detail "Pemilik port: $(@($frontendAvailability.OwnerNames) -join ', ') (tidak terverifikasi milik RepoLens)."
+    }
+    Write-Detail "Proses pemilik port tidak dihentikan. Ulangi dengan port lain, mis. -FrontendPort 5174."
+  }
 }
-if ($wantBackend -and (Test-PortInUse -Port $BackendPort)) {
-  Write-FailMsg "Port $BackendPort sudah digunakan proses lain."
-  Write-Detail "Proses pemilik port tidak dihentikan. Ulangi dengan port lain, mis. -BackendPort 8001."
-  exit 1
+if ($wantBackend) {
+  $backendAvailability = Get-PortAvailability -Port $BackendPort
+  if ($backendAvailability.InUse) {
+    $portBlocked = $true
+    Write-FailMsg "Port $BackendPort sudah digunakan proses lain."
+    if (@($backendAvailability.OwnerNames).Count -gt 0) {
+      Write-Detail "Pemilik port: $(@($backendAvailability.OwnerNames) -join ', ') (tidak terverifikasi milik RepoLens)."
+    }
+    Write-Detail "Proses pemilik port tidak dihentikan. Ulangi dengan port lain, mis. -BackendPort 8001."
+  }
 }
+if ($portBlocked) { exit 1 }
 Write-Ok "Port yang diminta tersedia."
 
 Write-Host ""
@@ -356,7 +687,8 @@ try {
     $frontendProcess = Start-Process -FilePath $npmCmd `
       -ArgumentList "run", "dev", "--", "--port", "$FrontendPort", "--strictPort" `
       -WorkingDirectory $FrontendDir -NoNewWindow -PassThru
-    $script:children += [pscustomobject]@{ Name = "frontend (vite)"; Pid = $frontendProcess.Id; Image = $frontendProcess.ProcessName }
+    $script:Session += New-SessionRecord -Name "frontend (vite)" -Process $frontendProcess
+    Save-SessionState
     Write-Detail "PID $($frontendProcess.Id) -> $FrontendUrl"
   }
 
@@ -365,7 +697,8 @@ try {
     $backendProcess = Start-Process -FilePath $backendPython `
       -ArgumentList "-m", "uvicorn", "app.main:app", "--reload", "--port", "$BackendPort" `
       -WorkingDirectory $BackendDir -NoNewWindow -PassThru
-    $script:children += [pscustomobject]@{ Name = "backend (uvicorn)"; Pid = $backendProcess.Id; Image = $backendProcess.ProcessName }
+    $script:Session += New-SessionRecord -Name "backend (uvicorn)" -Process $backendProcess
+    Save-SessionState
     Write-Detail "PID $($backendProcess.Id) -> $BackendUrl"
   }
 
@@ -431,7 +764,7 @@ try {
     # layanan yang berhenti tidak dibiarkan meninggalkan sisa proses lain.
     $stopped = $null
     while ($true) {
-      foreach ($child in $script:children) {
+      foreach ($child in @(Get-SessionRecords)) {
         if (-not (Get-Process -Id $child.Pid -ErrorAction SilentlyContinue)) { $stopped = $child; break }
       }
       if ($stopped -ne $null) { break }
