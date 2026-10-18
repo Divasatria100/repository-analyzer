@@ -212,6 +212,11 @@ export function analysisResultFixture(
       limitations: [],
     },
     summary: {
+      languages: [{ language: "Python", support: "Primary Support", file_count: 1 }],
+      files: {
+        indexed: 2,
+        parse_results: { Parsed: 1, "Parsed with diagnostics": 0, Failed: 0, "Not parsed": 1 },
+      },
       security: {
         state: null,
         findings: {
@@ -229,10 +234,16 @@ export function analysisResultFixture(
           by_confidence: { High: 1, Medium: 0, Low: 0 },
           by_rule: { "ARCH-CIRCULAR-DEPENDENCY": 1 },
         },
+        module_count: 2,
+        module_dependency_count: 2,
+        cycle_count: { value: 1, unit: "cycles" },
       },
       dependencies: {
         state: "No findings detected",
         findings: { total: 0, by_severity: {}, by_confidence: {}, by_rule: {} },
+        dependency_count: { total: 1, direct: 1, transitive: 0 },
+        vulnerable_count: 1,
+        duplicate_version_package_count: 0,
       },
       code_structure: {
         state: "No findings detected",
