@@ -186,7 +186,7 @@ function Get-SessionStatePath {
   }
   $root = $RepoRoot
   if ([string]::IsNullOrWhiteSpace($root)) { $root = (Get-Location).Path }
-  $sha = [System.Security.Cryptography.SHA1]::Create()
+  $sha = [System.Security.Cryptography.SHA256]::Create()
   try {
     $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($root.ToLowerInvariant()))
   } finally {
