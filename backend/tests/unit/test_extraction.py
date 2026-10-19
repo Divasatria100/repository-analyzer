@@ -1,7 +1,8 @@
 """Archive extraction tests: containment + incremental caps (no git needed).
 
 Tarballs are built in-memory; extraction must reject escapes/symlinks and
-enforce per-file, total, count, and depth limits without silent truncation.
+enforce total, count, and depth limits without silent truncation. Per-file
+size is deferred to indexing/parsing so the file can be recorded there.
 """
 
 import io
@@ -19,13 +20,11 @@ pytestmark = pytest.mark.security
 
 def _limits(
     max_total_bytes: int = 1_000_000,
-    max_file_bytes: int = 100_000,
     max_files: int = 100,
     max_depth: int = 8,
 ) -> ExtractionLimits:
     return ExtractionLimits(
         max_total_bytes=max_total_bytes,
-        max_file_bytes=max_file_bytes,
         max_files=max_files,
         max_depth=max_depth,
     )
@@ -86,12 +85,12 @@ def test_symlinks_recorded_never_created(tmp_path: Path) -> None:
     assert report.skipped_entries == ["link.py"]
 
 
-def test_per_file_limit_enforced(tmp_path: Path) -> None:
+def test_oversized_file_is_extracted_for_indexing(tmp_path: Path) -> None:
     dest = tmp_path / "ws"
     dest.mkdir()
-    with pytest.raises(RetrievalSizeLimitError):
-        extract_tar_stream(_tar([("big.bin", b"x" * 200_000, "file")]), dest, _limits())
-    assert (dest / "big.bin").exists() is False or (dest / "big.bin").stat().st_size <= 100_000
+    report = extract_tar_stream(_tar([("big.bin", b"x" * 200_000, "file")]), dest, _limits())
+    assert report.files_extracted == 1
+    assert (dest / "big.bin").stat().st_size == 200_000
 
 
 def test_total_bytes_limit_enforced(tmp_path: Path) -> None:

@@ -43,7 +43,6 @@ def _service(**overrides: object) -> RetrievalService:
     network = settings.network
     params: dict[str, object] = {
         "repo_max_bytes": operational.repo_max_size_bytes,
-        "file_max_bytes": operational.file_max_size_bytes,
         "max_files": operational.index_max_files,
         "max_depth": operational.index_max_depth,
         "storage_max_bytes": operational.analysis_storage_max_mb * 1024 * 1024,

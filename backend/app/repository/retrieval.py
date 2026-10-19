@@ -82,7 +82,6 @@ class ExtractionLimits:
     """Incremental enforcement caps (values from centralized settings)."""
 
     max_total_bytes: int
-    max_file_bytes: int
     max_files: int
     max_depth: int
 
@@ -222,8 +221,9 @@ def extract_tar_stream(stream: BinaryIO, dest: Path, limits: ExtractionLimits) -
 
     Rejects absolute/drive/UNC/escaping paths, never creates symlinks,
     hardlinks, or special files (records them as skipped), and enforces
-    per-file, total-bytes, file-count, and depth limits as data arrives —
-    never truncating silently into a complete-looking result.
+    total-bytes, file-count, and depth limits as data arrives — never
+    truncating silently into a complete-looking result. Individual file
+    size is bounded later at indexing/parsing, not retrieval.
     """
     report = ExtractionReport()
     resolved_dest = dest.resolve()
@@ -263,8 +263,6 @@ def _extract_member(
         # Symlinks, hardlinks, devices, FIFOs, sockets: recorded, never created.
         report.skipped_entries.append(name)
         return
-    if member.size > limits.max_file_bytes:
-        raise RetrievalSizeLimitError()
     report.files_extracted += 1
     if report.files_extracted > limits.max_files:
         raise RetrievalSizeLimitError()
@@ -312,7 +310,6 @@ class RetrievalService:
         self,
         *,
         repo_max_bytes: int,
-        file_max_bytes: int,
         max_files: int,
         max_depth: int,
         storage_max_bytes: int,
@@ -320,7 +317,6 @@ class RetrievalService:
         max_retries: int,
     ) -> None:
         self._repo_max_bytes = repo_max_bytes
-        self._file_max_bytes = file_max_bytes
         self._max_files = max_files
         self._max_depth = max_depth
         self._storage_max_bytes = storage_max_bytes
@@ -334,7 +330,6 @@ class RetrievalService:
         network = settings.network
         return cls(
             repo_max_bytes=operational.repo_max_size_bytes,
-            file_max_bytes=operational.file_max_size_bytes,
             max_files=operational.index_max_files,
             max_depth=operational.index_max_depth,
             storage_max_bytes=operational.analysis_storage_max_mb * 1024 * 1024,
@@ -345,7 +340,6 @@ class RetrievalService:
     def _limits(self) -> ExtractionLimits:
         return ExtractionLimits(
             max_total_bytes=min(self._repo_max_bytes, self._storage_max_bytes),
-            max_file_bytes=self._file_max_bytes,
             max_files=self._max_files,
             max_depth=self._max_depth,
         )

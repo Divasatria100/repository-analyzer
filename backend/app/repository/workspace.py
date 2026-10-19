@@ -14,6 +14,7 @@ import shutil
 import stat
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,19 +46,13 @@ class SweepReport:
     errors: list[str] = field(default_factory=list)
 
 
-def _make_writable(function: object, path: str, excinfo: object) -> None:
-    """shutil.rmtree error handler: clear read-only bits (git objects) and retry."""
+def _make_writable(function: Callable[..., object], path: str, excinfo: object) -> None:
+    """shutil.rmtree error handler: clear read-only bits and retry once."""
     try:
         import os
 
         os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
-        import pathlib
-
-        target = pathlib.Path(path)
-        if target.is_dir() and not target.is_symlink():
-            shutil.rmtree(path, onerror=_make_writable)
-        else:
-            target.unlink(missing_ok=True)
+        function(path)
     except OSError:
         pass
 
