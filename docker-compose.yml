@@ -55,6 +55,11 @@ services:
       REPOLENS_DATABASE__URL: ${REPOLENS_DATABASE__URL:-postgresql+psycopg://${POSTGRES_USER:-repolens}:${POSTGRES_PASSWORD:-repolens-dev-only}@postgres:5432/${POSTGRES_DB:-repolens}}
     ports:
       - "8000:8000"
+    # Apply migrations before serving so a fresh volume has the required schema.
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       # Source mount for FastAPI --reload during development.
       - ./backend:/srv/backend

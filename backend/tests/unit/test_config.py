@@ -137,7 +137,7 @@ def test_invalid_evidence_window_relationship_rejected(
 
 def test_database_settings_load_and_validate(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = load_settings()
-    assert "localhost" in settings.database.url
+    assert any(host in settings.database.url for host in ("localhost", "127.0.0.1"))
     assert settings.database.echo is False
     monkeypatch.setenv("REPOLENS_DATABASE__URL", "not-a-url")
     with pytest.raises(ValidationError):

@@ -97,6 +97,18 @@ def upgrade() -> None:
     )
     op.create_index("ix_finding_locations_finding_id", "finding_locations", ["finding_id"])
     op.create_table(
+        "modules",
+        sa.Column("id", sa.String(32), primary_key=True),
+        sa.Column("analysis_id", sa.String(32), sa.ForeignKey("analyses.id"), nullable=False),
+        sa.Column("module_id", sa.String(4096), nullable=False),
+        sa.Column("file_id", sa.String(32), sa.ForeignKey("files.id"), nullable=True),
+        sa.Column("partially_represented", sa.Boolean(), nullable=False, server_default="0"),
+        sa.Column("layer", sa.String(64), nullable=True),
+        *_timestamps(),
+        sa.UniqueConstraint("analysis_id", "module_id", name="uq_modules_analysis_module"),
+    )
+    op.create_index("ix_modules_analysis_id", "modules", ["analysis_id"])
+    op.create_table(
         "finding_modules",
         sa.Column("id", sa.String(32), primary_key=True),
         sa.Column("finding_id", sa.String(32), sa.ForeignKey("findings.id"), nullable=False),
@@ -107,15 +119,6 @@ def upgrade() -> None:
         sa.UniqueConstraint("finding_id", "module_id", name="uq_finding_modules_pair"),
     )
     op.create_index("ix_finding_modules_finding_id", "finding_modules", ["finding_id"])
-    op.create_table(
-        "finding_dependencies",
-        sa.Column("id", sa.String(32), primary_key=True),
-        sa.Column("finding_id", sa.String(32), sa.ForeignKey("findings.id"), nullable=False),
-        sa.Column("dependency_id", sa.String(32), sa.ForeignKey("dependencies.id"), nullable=False),
-        *_timestamps(),
-        sa.UniqueConstraint("finding_id", "dependency_id", name="uq_finding_dependencies_pair"),
-    )
-    op.create_index("ix_finding_dependencies_finding_id", "finding_dependencies", ["finding_id"])
     op.create_table(
         "dependencies",
         sa.Column("id", sa.String(32), primary_key=True),
@@ -140,6 +143,15 @@ def upgrade() -> None:
         "dependencies",
         ["analysis_id", "ecosystem", "canonical_name"],
     )
+    op.create_table(
+        "finding_dependencies",
+        sa.Column("id", sa.String(32), primary_key=True),
+        sa.Column("finding_id", sa.String(32), sa.ForeignKey("findings.id"), nullable=False),
+        sa.Column("dependency_id", sa.String(32), sa.ForeignKey("dependencies.id"), nullable=False),
+        *_timestamps(),
+        sa.UniqueConstraint("finding_id", "dependency_id", name="uq_finding_dependencies_pair"),
+    )
+    op.create_index("ix_finding_dependencies_finding_id", "finding_dependencies", ["finding_id"])
     op.create_table(
         "dependency_relationships",
         sa.Column("id", sa.String(32), primary_key=True),
@@ -194,18 +206,6 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_architecture_metrics_analysis_id", "architecture_metrics", ["analysis_id"])
-    op.create_table(
-        "modules",
-        sa.Column("id", sa.String(32), primary_key=True),
-        sa.Column("analysis_id", sa.String(32), sa.ForeignKey("analyses.id"), nullable=False),
-        sa.Column("module_id", sa.String(4096), nullable=False),
-        sa.Column("file_id", sa.String(32), sa.ForeignKey("files.id"), nullable=True),
-        sa.Column("partially_represented", sa.Boolean(), nullable=False, server_default="0"),
-        sa.Column("layer", sa.String(64), nullable=True),
-        *_timestamps(),
-        sa.UniqueConstraint("analysis_id", "module_id", name="uq_modules_analysis_module"),
-    )
-    op.create_index("ix_modules_analysis_id", "modules", ["analysis_id"])
     op.create_table(
         "module_dependencies",
         sa.Column("id", sa.String(32), primary_key=True),
@@ -315,22 +315,22 @@ def downgrade() -> None:
     op.drop_index("ix_module_dependencies_analysis_id", table_name="module_dependencies")
     op.drop_index("ix_module_dependencies_source_id", table_name="module_dependencies")
     op.drop_table("module_dependencies")
+    op.drop_index("ix_finding_modules_finding_id", table_name="finding_modules")
+    op.drop_table("finding_modules")
     op.drop_index("ix_modules_analysis_id", table_name="modules")
     op.drop_table("modules")
     op.drop_index("ix_architecture_metrics_analysis_id", table_name="architecture_metrics")
     op.drop_table("architecture_metrics")
     op.drop_index("ix_dependency_advisories_dependency_id", table_name="dependency_advisories")
     op.drop_table("dependency_advisories")
+    op.drop_index("ix_finding_dependencies_finding_id", table_name="finding_dependencies")
+    op.drop_table("finding_dependencies")
     op.drop_index("ix_dependency_relationships_child_id", table_name="dependency_relationships")
     op.drop_index("ix_dependency_relationships_parent_id", table_name="dependency_relationships")
     op.drop_table("dependency_relationships")
     op.drop_index("ix_dependencies_analysis_package", table_name="dependencies")
     op.drop_index("ix_dependencies_analysis_id", table_name="dependencies")
     op.drop_table("dependencies")
-    op.drop_index("ix_finding_dependencies_finding_id", table_name="finding_dependencies")
-    op.drop_table("finding_dependencies")
-    op.drop_index("ix_finding_modules_finding_id", table_name="finding_modules")
-    op.drop_table("finding_modules")
     op.drop_index("ix_finding_locations_finding_id", table_name="finding_locations")
     op.drop_table("finding_locations")
     op.drop_index("ix_findings_analysis_id", table_name="findings")

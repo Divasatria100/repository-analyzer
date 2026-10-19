@@ -9,7 +9,11 @@
   menunggu kesiapan kedua layanan melalui endpoint yang sudah ada.
 
   - Tidak menginstal/memperbarui dependency, tidak mengubah konfigurasi proyek.
-  - Tidak menjalankan migration, seed, analyzer, atau operasi database.
+  - Memastikan service PostgreSQL RepoLens dari Docker Compose berjalan dan
+    siap menerima koneksi sebelum backend/frontend dimulai. Script hanya
+    menjalankan service `postgres` yang sudah didefinisikan; container atau
+    layanan lain tidak disentuh.
+  - Tidak menjalankan migration, seed, atau analyzer.
   - Tidak menjalankan kode dari repository GitHub yang dianalisis RepoLens;
     script ini hanya menjalankan layanan RepoLens sendiri.
   - Tidak menimpa file .env dan tidak menampilkan isi .env/secret.
@@ -30,8 +34,9 @@
   Backend Python dipilih dari backend/.venv bila tersedia. Bila tidak, script
   memakai `python` di PATH secara EKSPLISIT dan tetap memvalidasi versi Python
   (sesuai backend/pyproject.toml) dan dependency wajib sebelum menjalankan
-  Uvicorn. `.env` bersifat opsional: nilai default aplikasi aman untuk
-  development.
+  Uvicorn. `.env` diperlukan bila PostgreSQL lokal tidak memakai kredensial
+  default aplikasi; lihat backend/.env.example. Jalankan
+  `alembic upgrade head` sekali sebelum backend host memakai database baru.
 
 .PARAMETER FrontendPort
   Port Vite (default 5173, selaras frontend/vite.config.ts).
@@ -41,6 +46,10 @@
 
 .PARAMETER ReadyTimeoutSec
   Batas waktu tunggu kesiapan tiap layanan, dalam detik (default 90, minimum 5).
+
+.PARAMETER PostgresReadyTimeoutSec
+  Batas waktu tunggu PostgreSQL RepoLens siap menerima koneksi, dalam detik
+  (default 60, minimum 5). Hanya dipakai saat backend akan dijalankan.
 
 .PARAMETER StopTimeoutSec
   Batas waktu tunggu agar proses sesi sebelumnya berhenti dan port menjadi
@@ -58,6 +67,7 @@
   .\start-dev.ps1 -SkipBackend
   .\start-dev.ps1 -SkipFrontend
   .\start-dev.ps1 -ReadyTimeoutSec 30
+  .\start-dev.ps1 -PostgresReadyTimeoutSec 120
   .\start-dev.ps1 -StopTimeoutSec 10
 #>
 
@@ -67,6 +77,8 @@ param(
   [int]$BackendPort = 8000,
   [ValidateRange(5, 600)]
   [int]$ReadyTimeoutSec = 90,
+  [ValidateRange(5, 600)]
+  [int]$PostgresReadyTimeoutSec = 60,
   [ValidateRange(1, 300)]
   [int]$StopTimeoutSec = 20,
   [switch]$SkipFrontend,
@@ -79,6 +91,9 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $FrontendDir = Join-Path $RepoRoot "frontend"
 $BackendDir = Join-Path $RepoRoot "backend"
+$ComposeFile = Join-Path $RepoRoot "docker-compose.yml"
+$script:ComposeFile = $ComposeFile
+$script:RepoRoot = $RepoRoot
 
 $FrontendUrl = "http://localhost:$FrontendPort"
 $BackendUrl = "http://localhost:$BackendPort"
@@ -422,6 +437,161 @@ function Stop-OwnProcesses {
   Save-SessionState
 }
 
+function Invoke-NativeCommand {
+  # Jalankan native command dengan stdout+stderr digabung TANPA memicu
+  # NativeCommandError. Keberhasilan selalu ditentukan oleh ExitCode
+  # ($LASTEXITCODE), bukan oleh adanya output di stderr.
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$FilePath,
+    [string[]]$Arguments = @()
+  )
+  $previousPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $output = @(& $FilePath @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+  return [pscustomobject]@{
+    ExitCode = $exitCode
+    Output   = $output
+  }
+}
+
+function Test-DockerDaemon {
+  # Docker dianggap aktif hanya bila daemon menjawab dan Compose tersedia.
+  $dockerCmd = Get-Command "docker" -ErrorAction SilentlyContinue
+  if ($null -eq $dockerCmd) {
+    Write-FailMsg "Docker CLI tidak ditemukan di PATH."
+    Write-Detail "Pasang Docker Desktop, lalu jalankan ulang script."
+    return $false
+  }
+
+  $info = Invoke-NativeCommand -FilePath "docker" `
+    -Arguments @("info", "--format", "{{.ServerVersion}}")
+  $versions = @($info.Output |
+    Where-Object { $_ -is [string] -and -not [string]::IsNullOrWhiteSpace($_) })
+  if ($info.ExitCode -ne 0 -or $versions.Count -eq 0) {
+    Write-FailMsg "Docker tidak aktif."
+    Write-Detail "Jalankan Docker Desktop dan tunggu hingga siap, lalu ulangi."
+    if ($info.Output.Count -gt 0) {
+      Write-Detail ([string]($info.Output | Select-Object -Last 1))
+    }
+    return $false
+  }
+
+  $compose = Invoke-NativeCommand -FilePath "docker" -Arguments @("compose", "version")
+  if ($compose.ExitCode -ne 0) {
+    Write-FailMsg "Docker Compose tidak tersedia."
+    Write-Detail "Pastikan plugin Docker Compose terpasang bersama Docker Desktop."
+    if ($compose.Output.Count -gt 0) {
+      Write-Detail ([string]($compose.Output | Select-Object -Last 1))
+    }
+    return $false
+  }
+
+  Write-Detail "Docker  : $([string]$versions[0])"
+  return $true
+}
+
+function Get-ComposeArgs {
+  return @(
+    "compose",
+    "-f", $script:ComposeFile,
+    "--project-directory", $script:RepoRoot
+  )
+}
+
+function Get-PostgresContainerId {
+  $composeArgs = @(Get-ComposeArgs) + @("ps", "-a", "-q", "postgres")
+  $result = Invoke-NativeCommand -FilePath "docker" -Arguments $composeArgs
+  if ($result.ExitCode -ne 0) { return $null }
+  return ($result.Output |
+    ForEach-Object { [string]$_ } |
+    Where-Object { $_ -match '^[0-9a-f]{12,64}$' } |
+    Select-Object -First 1)
+}
+
+function Get-PostgresContainerState {
+  param([string]$ContainerId)
+  if ([string]::IsNullOrWhiteSpace($ContainerId)) { return "missing" }
+  $result = Invoke-NativeCommand -FilePath "docker" `
+    -Arguments @("inspect", "--format", "{{.State.Status}}", $ContainerId)
+  if ($result.ExitCode -ne 0) { return "unknown" }
+  $state = @($result.Output |
+    ForEach-Object { [string]$_ } |
+    Where-Object { $_ -match '^(created|running|paused|restarting|removing|exited|dead)$' } |
+    Select-Object -First 1)
+  if ($state.Count -eq 0) { return "unknown" }
+  return [string]$state[0]
+}
+
+function Test-PostgresReady {
+  $composeArgs = @(Get-ComposeArgs) + @(
+    "exec", "-T", "postgres", "sh", "-c",
+    'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+  )
+  $result = Invoke-NativeCommand -FilePath "docker" -Arguments $composeArgs
+  return ($result.ExitCode -eq 0)
+}
+
+function Ensure-RepoLensPostgres {
+  param([int]$TimeoutSec)
+  # Hanya menyentuh service PostgreSQL dari docker-compose.yml RepoLens.
+  if (-not (Test-Path -LiteralPath $script:ComposeFile)) {
+    Write-FailMsg "docker-compose.yml tidak ditemukan di $($script:ComposeFile)."
+    return $false
+  }
+
+  $containerId = Get-PostgresContainerId
+  $state = Get-PostgresContainerState -ContainerId $containerId
+
+  if ($state -eq "running") {
+    Write-Detail "Container PostgreSQL sudah berjalan."
+  } else {
+    if ($state -eq "missing") {
+      Write-Detail "Container PostgreSQL belum ada; membuat dari docker-compose.yml."
+    } else {
+      Write-Detail "Container PostgreSQL berstatus '$state'; menjalankan container yang ada."
+    }
+    $composeArgs = @(Get-ComposeArgs) + @("up", "-d", "postgres")
+    $result = Invoke-NativeCommand -FilePath "docker" -Arguments $composeArgs
+    if ($result.ExitCode -ne 0) {
+      Write-FailMsg "Gagal menjalankan container PostgreSQL RepoLens (exit code $($result.ExitCode))."
+      foreach ($line in @($result.Output | Select-Object -Last 3)) {
+        Write-Detail ([string]$line)
+      }
+      return $false
+    }
+  }
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSec)
+  while ((Get-Date) -lt $deadline) {
+    $containerId = Get-PostgresContainerId
+    if (-not [string]::IsNullOrWhiteSpace($containerId)) {
+      $state = Get-PostgresContainerState -ContainerId $containerId
+      if ($state -eq "exited" -or $state -eq "dead") {
+        Write-FailMsg "Container PostgreSQL RepoLens berhenti (state: $state)."
+        Write-Detail "Periksa log: docker compose -f `"$($script:ComposeFile)`" logs postgres"
+        return $false
+      }
+      if (Test-PostgresReady) {
+        Write-Ok "PostgreSQL siap menerima koneksi."
+        return $true
+      }
+    }
+    Start-Sleep -Milliseconds 1000
+  }
+
+  Write-FailMsg "PostgreSQL belum siap menerima koneksi dalam $TimeoutSec detik."
+  Write-Detail "Periksa status/log container:"
+  Write-Detail "  docker compose -f `"$($script:ComposeFile)`" ps postgres"
+  Write-Detail "  docker compose -f `"$($script:ComposeFile)`" logs postgres"
+  return $false
+}
+
 # Path state sesi RepoLens (dipakai untuk safe restart).
 $script:StateFilePath = Get-SessionStatePath
 
@@ -530,9 +700,10 @@ if ($wantBackend) {
   if (Test-Path -LiteralPath $envPath) {
     Write-Ok "backend/.env ditemukan (isi tidak ditampilkan)."
   } elseif (Test-Path -LiteralPath $envExamplePath) {
-    Write-WarnMsg "backend/.env belum ada — memakai konfigurasi default aplikasi (aman untuk development)."
-    Write-Detail "Untuk menyesuaikan, salin contoh berikut lalu edit manual:"
+    Write-WarnMsg "backend/.env belum ada — memakai URL database default (localhost, tanpa kredensial)."
+    Write-Detail "Bila PostgreSQL lokal memakai kredensial (mis. Docker Compose), salin contoh:"
     Write-Detail "  Copy-Item backend\.env.example backend\.env"
+    Write-Detail "Lalu jalankan migrasi sekali: cd backend; alembic upgrade head"
     Write-Detail "Script tidak membuat/menimpa .env secara otomatis."
   } else {
     Write-WarnMsg "backend/.env dan backend/.env.example tidak ada — memakai konfigurasi default aplikasi."
@@ -584,6 +755,19 @@ if ($wantFrontend) {
   Write-Detail "Node.js : $nodeVersion"
   Write-Detail "npm     : $npmCmd"
   Write-Ok "Frontend dependencies terpasang."
+}
+
+# ---------------- [CHECK] PostgreSQL (Docker Compose) ----------------
+# Backend membutuhkan database yang siap sebelum menerima request. Periksa
+# Docker dan service postgres milik RepoLens; hentikan startup dengan aman
+# bila tidak dapat dipastikan siap. Container/layanan lain tidak disentuh.
+if ($wantBackend) {
+  Write-Check "PostgreSQL (Docker Compose)"
+  if (-not (Test-DockerDaemon)) { exit 1 }
+  if (-not (Ensure-RepoLensPostgres -TimeoutSec $PostgresReadyTimeoutSec)) {
+    Write-Detail "Startup dihentikan sebelum backend/frontend dijalankan."
+    exit 1
+  }
 }
 
 # ---------------- Safe restart: hentikan sesi RepoLens sebelumnya ----------------

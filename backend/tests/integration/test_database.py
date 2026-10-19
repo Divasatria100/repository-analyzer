@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import Engine, Integer, String, create_engine, inspect, text
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 
+from app.core import database
 from app.core.config import DatabaseSettings
 from app.core.database import create_engine_from_settings, create_session_factory, session_scope
 from app.models.base import Base, TimestampMixin
@@ -65,6 +66,38 @@ def test_engine_factory_uses_configured_url() -> None:
 
 def test_postgresql_remains_configured_target() -> None:
     assert DatabaseSettings().url.startswith("postgresql+psycopg://")
+
+
+def test_postgres_engine_bounds_connection_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    real_create_engine = database.create_engine
+
+    def spy(url: str, **kwargs: object) -> Engine:
+        captured["url"] = url
+        captured.update(kwargs)
+        return real_create_engine("sqlite:///:memory:")
+
+    monkeypatch.setattr(database, "create_engine", spy)
+    engine = database.create_engine_from_settings(
+        DatabaseSettings(url="postgresql+psycopg://u:p@localhost:5432/repolens")
+    )
+    assert captured["connect_args"] == {"connect_timeout": 5}
+    engine.dispose()
+
+
+def test_sqlite_engine_has_no_postgres_timeout_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    real_create_engine = database.create_engine
+
+    def spy(url: str, **kwargs: object) -> Engine:
+        captured["url"] = url
+        captured.update(kwargs)
+        return real_create_engine("sqlite:///:memory:")
+
+    monkeypatch.setattr(database, "create_engine", spy)
+    engine = database.create_engine_from_settings(DatabaseSettings(url="sqlite:///:memory:"))
+    assert captured["connect_args"] == {}
+    engine.dispose()
 
 
 def test_alembic_config_points_at_versions_dir() -> None:

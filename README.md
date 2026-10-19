@@ -241,7 +241,7 @@ Dev server: `http://localhost:5173`
 docker compose up --build
 ```
 
-This starts Postgres 17 (localhost-only port 5432), the backend on port 8000, and the frontend on port 5173. Safe defaults work without a `.env` file; copy `.env.example` to `.env` to override. The backend waits for a healthy database before starting.
+This starts Postgres 17 (localhost-only port 5432), the backend on port 8000, and the frontend on port 5173. Safe defaults work without a `.env` file; copy `.env.example` to `.env` to override. The backend waits for a healthy database, applies Alembic migrations (`alembic upgrade head`), and only then starts serving.
 
 ## Testing
 

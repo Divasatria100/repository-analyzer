@@ -17,10 +17,20 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import DatabaseSettings
 
+#: Bound connection setup so an unreachable database fails within a bounded
+#: time instead of blocking an API request indefinitely. libpq applies this
+#: per host address, so ``localhost`` (IPv6 + IPv4) takes at most twice this.
+_DB_CONNECT_TIMEOUT_S = 5
+
 
 def create_engine_from_settings(db: DatabaseSettings) -> Engine:
     """Create a SQLAlchemy engine from database settings (lazy, no I/O)."""
-    return create_engine(db.url, echo=db.echo, pool_pre_ping=True)
+    connect_args: dict[str, object] = {}
+    if db.url.startswith("postgresql"):
+        connect_args["connect_timeout"] = _DB_CONNECT_TIMEOUT_S
+    return create_engine(
+        db.url, echo=db.echo, pool_pre_ping=True, connect_args=connect_args
+    )
 
 
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:

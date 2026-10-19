@@ -9,8 +9,14 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
+Copy-Item .env.example .env   # database URL for the local Postgres
+alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
+
+The backend needs a reachable, migrated PostgreSQL database. Without one,
+`POST /api/analyses` fails with `500` after the bounded connect timeout
+instead of blocking the request.
 
 Health check: `GET http://localhost:8000/api/health`
 
